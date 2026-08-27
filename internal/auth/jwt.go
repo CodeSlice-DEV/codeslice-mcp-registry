@@ -58,16 +58,16 @@ type JWTManager struct {
 	tokenDuration time.Duration
 
 	// OIDC Configurations
-	oidcEnabled               bool
-	oidcIssuer                string
-	oidcClientID              string
-	oidcPublishPerms          string
-	oidcEditPerms             string
-	oidcMsMultiTenantEnabled  bool
-	oidcAllowedTenants        []string
-	oidcAllowedIssuers        []string
-	oidcGroupsClaim           string
-	oidcRoleMapping           map[string][]Permission
+	oidcEnabled              bool
+	oidcIssuer               string
+	oidcClientID             string
+	oidcPublishPerms         string
+	oidcEditPerms            string
+	oidcMsMultiTenantEnabled bool
+	oidcAllowedTenants       []string
+	oidcAllowedIssuers       []string
+	oidcGroupsClaim          string
+	oidcRoleMapping          map[string][]Permission
 
 	// Bounded, thread-safe LRU/TTL verifier cache
 	cacheMu        sync.RWMutex
@@ -179,7 +179,7 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 	}
 
 	// Bounded initialization timeout to prevent hanging the HTTP server
-	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	var verifier *oidc.IDTokenVerifier
@@ -355,7 +355,7 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 	}
 
 	// Extract subject identity: upn -> email -> sub
-	subIdentity := ""
+	var subIdentity string
 	if upn, ok := oidcClaims["upn"].(string); ok && upn != "" {
 		subIdentity = upn
 	} else if email, ok := oidcClaims["email"].(string); ok && email != "" {
