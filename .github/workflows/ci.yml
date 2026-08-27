@@ -2,9 +2,9 @@ name: CI Pipeline
 
 on:
   push:
-    branches: [ develop ]
+    branches: [ main ]
   pull_request:
-    branches: [ develop ]
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -25,10 +25,9 @@ jobs:
         cache: true
 
     - name: Run lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
       with:
-        version: v1.64.5
-        install-mode: goinstall
+        version: v2.13.1
 
     - name: Validate schemas and examples
       run: make validate
