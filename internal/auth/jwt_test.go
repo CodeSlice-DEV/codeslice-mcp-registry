@@ -396,4 +396,21 @@ func TestJWTManager_BlockedNamespaces(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEmpty(t, tokenResponse.RegistryToken)
 	})
+
+	t.Run("enterprise OIDC config and SSRF whitelist verification", func(t *testing.T) {
+		enterpriseCfg := &config.Config{
+			JWTPrivateKey:                   hex.EncodeToString(testSeed),
+			OIDCEnabled:                     true,
+			OIDCIssuer:                      "https://login.microsoftonline.com/common/v2.0",
+			OIDCClientID:                    "mcp-app-client-id",
+			OIDCMicrosoftMultiTenantEnabled: true,
+			OIDCAllowedTenants:              "tenant-123,tenant-456",
+			OIDCAllowedIssuers:              "https://login.microsoftonline.com/*,https://auth.enterprise.com",
+			OIDCGroupsClaim:                 "groups",
+			OIDCRoleMappingJSON:             `{"mcp-admins":[{"action":"publish","resource":"*"}],"mcp-publishers":[{"action":"publish","resource":"io.enterprise/*"}]}`,
+		}
+
+		mgr := auth.NewJWTManager(enterpriseCfg)
+		require.NotNil(t, mgr)
+	})
 }

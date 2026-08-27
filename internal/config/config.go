@@ -20,12 +20,17 @@ type Config struct {
 	GitHubOIDCAudience string `env:"GITHUB_OIDC_AUDIENCE" envDefault:""`
 
 	// OIDC Configuration
-	OIDCEnabled      bool   `env:"OIDC_ENABLED" envDefault:"false"`
-	OIDCIssuer       string `env:"OIDC_ISSUER" envDefault:""`
-	OIDCClientID     string `env:"OIDC_CLIENT_ID" envDefault:""`
-	OIDCExtraClaims  string `env:"OIDC_EXTRA_CLAIMS" envDefault:""`
-	OIDCEditPerms    string `env:"OIDC_EDIT_PERMISSIONS" envDefault:""`
-	OIDCPublishPerms string `env:"OIDC_PUBLISH_PERMISSIONS" envDefault:""`
+	OIDCEnabled                     bool   `env:"OIDC_ENABLED" envDefault:"false"`
+	OIDCIssuer                      string `env:"OIDC_ISSUER" envDefault:""`
+	OIDCClientID                    string `env:"OIDC_CLIENT_ID" envDefault:""`
+	OIDCExtraClaims                 string `env:"OIDC_EXTRA_CLAIMS" envDefault:""`
+	OIDCEditPerms                   string `env:"OIDC_EDIT_PERMISSIONS" envDefault:""`
+	OIDCPublishPerms                string `env:"OIDC_PUBLISH_PERMISSIONS" envDefault:""`
+	OIDCMicrosoftMultiTenantEnabled bool   `env:"OIDC_MS_MULTI_TENANT_ENABLED" envDefault:"false"`
+	OIDCAllowedTenants              string `env:"OIDC_ALLOWED_TENANTS" envDefault:"*"`
+	OIDCAllowedIssuers              string `env:"OIDC_ALLOWED_ISSUERS" envDefault:""`
+	OIDCGroupsClaim                 string `env:"OIDC_GROUPS_CLAIM" envDefault:"groups"`
+	OIDCRoleMappingJSON             string `env:"OIDC_ROLE_MAPPING_JSON" envDefault:""`
 }
 
 // NewConfig creates a new configuration with default values
