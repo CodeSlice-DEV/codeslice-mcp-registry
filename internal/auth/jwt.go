@@ -321,6 +321,10 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		return nil, fmt.Errorf("failed to parse token: invalid signing method")
 	}
 
+	if err != nil || rawClaims == nil {
+		return nil, fmt.Errorf("failed to parse token header or claims: %w", err)
+	}
+
 	// Extract token issuer for multi-tenant verification lookup
 	tokenIssuer, _ := rawClaims["iss"].(string)
 
