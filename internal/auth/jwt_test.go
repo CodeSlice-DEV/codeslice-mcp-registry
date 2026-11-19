@@ -412,5 +412,68 @@ func TestJWTManager_BlockedNamespaces(t *testing.T) {
 
 		mgr := auth.NewJWTManager(enterpriseCfg)
 		require.NotNil(t, mgr)
+
+		// Exact match should pass
+		assert.True(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com"))
+		assert.True(t, mgr.IsIssuerAllowedForTest("https://login.microsoftonline.com/tenant-123/v2.0"))
+
+		// Malicious spoofed domain suffixes must be strictly rejected (prevent SSRF and rogue IdP)
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com.evil.tld"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com.attacker.com/v2.0"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://login.microsoftonline.com.evil.tld/common/v2.0"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("http://auth.enterprise.com")) // insecure HTTP rejected
+
+		// Empty/unconfigured issuer whitelist should fail-closed
+		emptyCfg := &config.Config{
+			JWTPrivateKey: hex.EncodeToString(testSeed),
+			OIDCEnabled:   true,
+		}
+		emptyMgr := auth.NewJWTManager(emptyCfg)
+		assert.False(t, emptyMgr.IsIssuerAllowedForTest("https://attacker-idp.evil.com"))
+		assert.False(t, emptyMgr.IsIssuerAllowedForTest(""))
+	})
+
+	t.Run("tenant ID allowlist enforcement and wildcard rejection in production", func(t *testing.T) {
+		prodCfg := &config.Config{
+			JWTPrivateKey:                   hex.EncodeToString(testSeed),
+			OIDCEnabled:                     true,
+			EnvironmentTier:                 "production",
+			OIDCMicrosoftMultiTenantEnabled: true,
+			OIDCAllowedTenants:              "allowed-tenant-uuid-1,allowed-tenant-uuid-2",
+		}
+		mgr := auth.NewJWTManager(prodCfg)
+		require.NotNil(t, mgr)
+
+		assert.True(t, mgr.IsTenantAllowedForTest("allowed-tenant-uuid-1"))
+		assert.True(t, mgr.IsTenantAllowedForTest("allowed-tenant-uuid-2"))
+		assert.False(t, mgr.IsTenantAllowedForTest("unauthorized-foreign-tenant"))
+		assert.False(t, mgr.IsTenantAllowedForTest(""))
+
+		// In production/staging, wildcard '*' must be strictly rejected
+		prodWildcardCfg := &config.Config{
+			JWTPrivateKey:      hex.EncodeToString(testSeed),
+			OIDCEnabled:        true,
+			EnvironmentTier:    "production",
+			OIDCAllowedTenants: "*",
+		}
+		prodWildcardMgr := auth.NewJWTManager(prodWildcardCfg)
+		assert.False(t, prodWildcardMgr.IsTenantAllowedForTest("any-random-tenant"))
+
+		stagingWildcardCfg := &config.Config{
+			JWTPrivateKey:      hex.EncodeToString(testSeed),
+			OIDCEnabled:        true,
+			EnvironmentTier:    "staging",
+			OIDCAllowedTenants: "*",
+		}
+		stagingWildcardMgr := auth.NewJWTManager(stagingWildcardCfg)
+		assert.False(t, stagingWildcardMgr.IsTenantAllowedForTest("any-random-tenant"))
+	})
+
+	t.Run("context tenant ID propagation", func(t *testing.T) {
+		ctx := context.Background()
+		assert.Equal(t, "", auth.TenantIDFromContext(ctx))
+
+		tenantCtx := auth.WithTenantID(ctx, "tenant-test-uuid")
+		assert.Equal(t, "tenant-test-uuid", auth.TenantIDFromContext(tenantCtx))
 	})
 }

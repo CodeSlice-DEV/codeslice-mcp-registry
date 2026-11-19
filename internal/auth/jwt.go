@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +21,24 @@ import (
 
 	"github.com/modelcontextprotocol/registry/internal/config"
 )
+
+type tenantContextKey struct{}
+
+// WithTenantID binds a tenant ID to a context for database and handler operations
+func WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, tenantContextKey{}, tenantID)
+}
+
+// TenantIDFromContext extracts the tenant ID from the context if present
+func TenantIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(tenantContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // PermissionAction represents the type of action that can be performed
 type PermissionAction string
@@ -38,6 +60,7 @@ type JWTClaims struct {
 	// Authentication method used to obtain this token
 	AuthMethod        Method       `json:"auth_method"`
 	AuthMethodSubject string       `json:"auth_method_sub"`
+	TenantID          string       `json:"tenant_id,omitempty"`
 	Permissions       []Permission `json:"permissions"`
 }
 
@@ -58,14 +81,19 @@ type JWTManager struct {
 	tokenDuration time.Duration
 
 	// OIDC Configurations
-	oidcEnabled        bool
-	oidcIssuer         string
-	oidcClientID       string
-	oidcPublishPerms   string
-	oidcEditPerms      string
-	oidcAllowedIssuers []string
-	oidcGroupsClaim    string
-	oidcRoleMapping    map[string][]Permission
+	oidcEnabled              bool
+	oidcIssuer               string
+	oidcClientID             string
+	oidcPublishPerms         string
+	oidcEditPerms            string
+	oidcMsMultiTenantEnabled bool
+	oidcAllowedTenants       []string
+	oidcAllowedIssuers       []string
+	oidcGroupsClaim          string
+	oidcRoleMapping          map[string][]Permission
+	oidcJwksFile             string
+	oidcJwksJSON             string
+	environmentTier          string
 
 	// Bounded, thread-safe LRU/TTL verifier cache
 	cacheMu        sync.RWMutex
@@ -97,6 +125,16 @@ func NewJWTManager(cfg *config.Config) *JWTManager {
 		}
 	}
 
+	allowedTenants := []string{}
+	if cfg.OIDCAllowedTenants != "" {
+		for _, t := range strings.Split(cfg.OIDCAllowedTenants, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				allowedTenants = append(allowedTenants, t)
+			}
+		}
+	}
+
 	allowedIssuers := []string{}
 	if cfg.OIDCAllowedIssuers != "" {
 		for _, i := range strings.Split(cfg.OIDCAllowedIssuers, ",") {
@@ -118,21 +156,58 @@ func NewJWTManager(cfg *config.Config) *JWTManager {
 	}
 
 	return &JWTManager{
-		privateKey:         privateKey,
-		publicKey:          publicKey,
-		tokenDuration:      5 * time.Minute, // 5-minute tokens as per requirements
-		oidcEnabled:        cfg.OIDCEnabled,
-		oidcIssuer:         cfg.OIDCIssuer,
-		oidcClientID:       cfg.OIDCClientID,
-		oidcPublishPerms:   cfg.OIDCPublishPerms,
-		oidcEditPerms:      cfg.OIDCEditPerms,
-		oidcAllowedIssuers: allowedIssuers,
-		oidcGroupsClaim:    groupsClaim,
-		oidcRoleMapping:    roleMapping,
-		verifiersCache:     make(map[string]*cachedVerifier),
-		cacheTTL:           1 * time.Hour,
-		maxCacheSize:       100,
+		privateKey:               privateKey,
+		publicKey:                publicKey,
+		tokenDuration:            5 * time.Minute, // 5-minute tokens as per requirements
+		oidcEnabled:              cfg.OIDCEnabled,
+		oidcIssuer:               cfg.OIDCIssuer,
+		oidcClientID:             cfg.OIDCClientID,
+		oidcPublishPerms:         cfg.OIDCPublishPerms,
+		oidcEditPerms:            cfg.OIDCEditPerms,
+		oidcMsMultiTenantEnabled: cfg.OIDCMicrosoftMultiTenantEnabled,
+		oidcAllowedTenants:       allowedTenants,
+		oidcAllowedIssuers:       allowedIssuers,
+		oidcGroupsClaim:          groupsClaim,
+		oidcRoleMapping:          roleMapping,
+		oidcJwksFile:             cfg.OIDCJWKSFile,
+		oidcJwksJSON:             cfg.OIDCJWKSJSON,
+		environmentTier:          cfg.EnvironmentTier,
+		verifiersCache:           make(map[string]*cachedVerifier),
+		cacheTTL:                 1 * time.Hour,
+		maxCacheSize:             100,
 	}
+}
+
+type staticJWKSTransport struct {
+	issuer   string
+	jwksJSON []byte
+}
+
+func (t *staticJWKSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	header := make(http.Header)
+	header.Set("Content-Type", "application/json")
+
+	if strings.HasSuffix(req.URL.Path, "/.well-known/openid-configuration") {
+		body := fmt.Sprintf(`{"issuer":%q,"jwks_uri":%q,"response_types_supported":["id_token"],"subject_types_supported":["public"],"id_token_signing_alg_values_supported":["RS256","EdDSA"]}`,
+			t.issuer, strings.TrimRight(t.issuer, "/")+"/keys")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+			Request:    req,
+		}, nil
+	}
+
+	if strings.HasSuffix(req.URL.Path, "/keys") || strings.HasSuffix(req.URL.Path, "/jwks.json") || strings.HasSuffix(req.URL.Path, "/discovery/v2.0/keys") {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(bytes.NewReader(t.jwksJSON)),
+			Request:    req,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("static JWKS transport: unexpected offline request to %s", req.URL.String())
 }
 
 // getOIDCVerifier returns a thread-safe, cached IDTokenVerifier for a given issuer
@@ -145,7 +220,7 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 		issuer = j.oidcIssuer
 	}
 
-	// SSRF Protection: Validate issuer against allowed issuers
+	// SSRF Protection: Validate issuer against allowed issuers before making any network call
 	if !j.isIssuerAllowed(issuer) {
 		slog.Warn("OIDC authentication blocked by SSRF whitelist", "issuer", issuer)
 		return nil, fmt.Errorf("issuer %q is not in the allowed OIDC issuers whitelist", issuer)
@@ -176,6 +251,24 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// If offline JWKS is configured, inject static transport to prevent external network calls (#2112)
+	if j.oidcJwksJSON != "" || j.oidcJwksFile != "" {
+		jwksBytes := []byte(j.oidcJwksJSON)
+		if j.oidcJwksFile != "" {
+			if data, err := os.ReadFile(j.oidcJwksFile); err == nil {
+				jwksBytes = data
+			}
+		}
+		if len(jwksBytes) > 0 {
+			transport := &staticJWKSTransport{
+				issuer:   issuer,
+				jwksJSON: jwksBytes,
+			}
+			client := &http.Client{Transport: transport}
+			initCtx = oidc.ClientContext(initCtx, client)
+		}
+	}
+
 	// Strict OIDC provider initialization - zero SkipIssuerCheck bypasses
 	provider, err := oidc.NewProvider(initCtx, issuer)
 	if err != nil {
@@ -185,7 +278,6 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 
 	// Bounded LRU cache size enforcement
 	if len(j.verifiersCache) >= j.maxCacheSize {
-		// Simple cache eviction of oldest entry
 		var oldestKey string
 		var oldestTime time.Time
 		for k, v := range j.verifiersCache {
@@ -208,12 +300,73 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 }
 
 func (j *JWTManager) isIssuerAllowed(issuer string) bool {
-	if len(j.oidcAllowedIssuers) == 0 {
-		return j.oidcIssuer == "" || issuer == j.oidcIssuer || strings.HasPrefix(issuer, j.oidcIssuer)
+	if issuer == "" {
+		return false
 	}
 
-	for _, allowed := range j.oidcAllowedIssuers {
-		if allowed == "*" || issuer == allowed || strings.HasPrefix(issuer, allowed) {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return false
+	}
+
+	// Fail closed if no allowed issuers configured
+	if j.oidcIssuer == "" && len(j.oidcAllowedIssuers) == 0 {
+		return false
+	}
+
+	allowedList := make([]string, 0, len(j.oidcAllowedIssuers)+1)
+	if j.oidcIssuer != "" {
+		allowedList = append(allowedList, j.oidcIssuer)
+	}
+	allowedList = append(allowedList, j.oidcAllowedIssuers...)
+
+	for _, allowed := range allowedList {
+		if allowed == "" {
+			continue
+		}
+		if allowed == "*" {
+			// Wildcard '*' is strictly forbidden in production and staging
+			if j.environmentTier == "production" || j.environmentTier == "staging" {
+				continue
+			}
+			return true
+		}
+
+		allowedU, err := url.Parse(allowed)
+		if err != nil {
+			continue
+		}
+
+		// Exact host match prevents domain suffix spoofing (e.g. login.enterprise.com.evil.tld)
+		if !strings.EqualFold(u.Host, allowedU.Host) {
+			continue
+		}
+
+		// Check path match
+		allowedPath := strings.TrimSuffix(allowedU.Path, "*")
+		if strings.HasPrefix(u.Path, allowedPath) || u.Path == allowedU.Path {
+			return true
+		}
+	}
+	return false
+}
+
+func (j *JWTManager) isTenantAllowed(tenantID string) bool {
+	if tenantID == "" {
+		return false
+	}
+	if len(j.oidcAllowedTenants) == 0 {
+		return false
+	}
+	for _, allowed := range j.oidcAllowedTenants {
+		if allowed == "*" {
+			if j.environmentTier == "production" || j.environmentTier == "staging" {
+				// Wildcard '*' is strictly forbidden in production and staging
+				continue
+			}
+			return true
+		}
+		if strings.EqualFold(allowed, tenantID) {
 			return true
 		}
 	}
@@ -291,6 +444,10 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		return nil, fmt.Errorf("failed to parse token header or claims: %w", err)
 	}
 
+	return j.validateOIDCToken(ctx, tokenString, rawClaims)
+}
+
+func (j *JWTManager) validateOIDCToken(ctx context.Context, tokenString string, rawClaims jwt.MapClaims) (*JWTClaims, error) {
 	// Extract token issuer for multi-tenant verification lookup
 	tokenIssuer, _ := rawClaims["iss"].(string)
 
@@ -302,16 +459,15 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 
 	idToken, err := verifier.Verify(ctx, tokenString)
 	if err != nil {
-		slog.Warn("OIDC token verification failed", "issuer", tokenIssuer, "error", err)
-		return nil, fmt.Errorf("failed to verify OIDC token: %w", err)
+		return nil, fmt.Errorf("OIDC token verification failed: %w", err)
 	}
 
 	var oidcClaims map[string]any
 	if err := idToken.Claims(&oidcClaims); err != nil {
-		return nil, fmt.Errorf("failed to extract claims: %w", err)
+		return nil, fmt.Errorf("failed to parse OIDC claims: %w", err)
 	}
 
-	// Extract standard OIDC subject identity: email -> sub
+	// Extract identity from claims
 	var subIdentity string
 	if email, ok := oidcClaims["email"].(string); ok && email != "" {
 		if emailVerified, hasVerification := oidcClaims["email_verified"].(bool); hasVerification && !emailVerified {
@@ -330,9 +486,24 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 	// Dynamic RBAC Permission Mapping
 	permissions := j.extractPermissionsFromClaims(oidcClaims)
 
+	// Extract tenant ID if present in claims
+	var tenantID string
+	if tid, ok := oidcClaims["tenant_id"].(string); ok && tid != "" {
+		tenantID = tid
+	} else if tid, ok := oidcClaims["tid"].(string); ok && tid != "" {
+		tenantID = tid
+	}
+
+	// Enforce tenant ID allowlist if configured
+	if len(j.oidcAllowedTenants) > 0 && !j.isTenantAllowed(tenantID) {
+		slog.Warn("OIDC token rejected: tenant ID not permitted", "tenant_id", tenantID)
+		return nil, fmt.Errorf("unauthorized tenant ID %q", tenantID)
+	}
+
 	slog.Info("OIDC token authenticated successfully",
 		"sub", subIdentity,
 		"issuer", idToken.Issuer,
+		"tenant_id", tenantID,
 		"auth_method", MethodOIDC,
 	)
 
@@ -345,6 +516,7 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		},
 		AuthMethod:        MethodOIDC,
 		AuthMethodSubject: subIdentity,
+		TenantID:          tenantID,
 		Permissions:       permissions,
 	}, nil
 }
@@ -395,7 +567,7 @@ func (j *JWTManager) extractPermissionsFromClaims(claims map[string]any) []Permi
 func extractGroupNames(claims map[string]any, groupsClaim string) []string {
 	var groups []string
 
-	for _, claimKey := range []string{groupsClaim, "groups", "roles"} {
+	for _, claimKey := range []string{groupsClaim, "groups", "roles", "wids"} {
 		if val, ok := claims[claimKey]; ok {
 			switch v := val.(type) {
 			case []interface{}:
@@ -457,4 +629,14 @@ func isResourceMatch(resource, pattern string) bool {
 		resource = u.Path
 	}
 	return resource == pattern
+}
+
+// IsIssuerAllowedForTest exposes isIssuerAllowed for unit testing
+func (j *JWTManager) IsIssuerAllowedForTest(issuer string) bool {
+	return j.isIssuerAllowed(issuer)
+}
+
+// IsTenantAllowedForTest exposes isTenantAllowed for unit testing
+func (j *JWTManager) IsTenantAllowedForTest(tenantID string) bool {
+	return j.isTenantAllowed(tenantID)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/modelcontextprotocol/registry/internal/auth"
 	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 	"github.com/modelcontextprotocol/registry/pkg/model"
 )
@@ -136,6 +137,13 @@ func buildFilterConditions(filter *ServerFilter, argIndex int) ([]string, []any,
 		conditions = append(conditions, fmt.Sprintf("is_latest = $%d", argIndex))
 		args = append(args, *filter.IsLatest)
 		argIndex++
+	}
+	if filter.TenantID != nil && *filter.TenantID != "" {
+		conditions = append(conditions, fmt.Sprintf("(tenant_id = $%d OR tenant_id IS NULL)", argIndex))
+		args = append(args, *filter.TenantID)
+		argIndex++
+	} else {
+		conditions = append(conditions, "(tenant_id IS NULL OR tenant_id = '')")
 	}
 	if filter.IncludeDeleted == nil || !*filter.IncludeDeleted {
 		conditions = append(conditions, "status != 'deleted'")
@@ -280,10 +288,15 @@ func (db *PostgreSQL) GetServerByName(ctx context.Context, tx pgx.Tx, serverName
 
 	// Build filter conditions
 	isLatest := true
+	var tenantID *string
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantID = &tid
+	}
 	filter := &ServerFilter{
 		Name:           &serverName,
 		IsLatest:       &isLatest,
 		IncludeDeleted: &includeDeleted,
+		TenantID:       tenantID,
 	}
 
 	argIndex := 1
@@ -346,10 +359,15 @@ func (db *PostgreSQL) GetServerByNameAndVersion(ctx context.Context, tx pgx.Tx, 
 	}
 
 	// Build filter conditions
+	var tenantID *string
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantID = &tid
+	}
 	filter := &ServerFilter{
 		Name:           &serverName,
 		Version:        &version,
 		IncludeDeleted: &includeDeleted,
+		TenantID:       tenantID,
 	}
 
 	argIndex := 1
@@ -412,9 +430,14 @@ func (db *PostgreSQL) GetAllVersionsByServerName(ctx context.Context, tx pgx.Tx,
 	}
 
 	// Build filter conditions
+	var tenantID *string
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantID = &tid
+	}
 	filter := &ServerFilter{
 		Name:           &serverName,
 		IncludeDeleted: &includeDeleted,
+		TenantID:       tenantID,
 	}
 
 	argIndex := 1
@@ -507,11 +530,16 @@ func (db *PostgreSQL) CreateServer(ctx context.Context, tx pgx.Tx, serverJSON *a
 		return nil, fmt.Errorf("failed to marshal server JSON: %w", err)
 	}
 
-	// Insert the new server version using composite primary key
+	// Insert the new server version using composite primary key with tenant_id isolation (#2112)
 	insertQuery := `
-		INSERT INTO servers (server_name, version, status, status_changed_at, status_message, published_at, updated_at, is_latest, value)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO servers (server_name, version, status, status_changed_at, status_message, published_at, updated_at, is_latest, value, tenant_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
+
+	var tenantIDAny any
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantIDAny = tid
+	}
 
 	_, err = db.getExecutor(tx).Exec(ctx, insertQuery,
 		serverJSON.Name,
@@ -523,6 +551,7 @@ func (db *PostgreSQL) CreateServer(ctx context.Context, tx pgx.Tx, serverJSON *a
 		officialMeta.UpdatedAt,
 		officialMeta.IsLatest,
 		valueJSON,
+		tenantIDAny,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert server: %w", err)
@@ -561,11 +590,16 @@ func (db *PostgreSQL) UpdateServer(ctx context.Context, tx pgx.Tx, serverName, v
 		return nil, fmt.Errorf("failed to marshal updated server: %w", err)
 	}
 
+	var tenantIDAny any
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantIDAny = tid
+	}
+
 	// Update only the JSON data (keep existing metadata columns)
 	query := `
 		UPDATE servers
 		SET value = $1, updated_at = NOW()
-		WHERE server_name = $2 AND version = $3
+		WHERE server_name = $2 AND version = $3 AND (tenant_id = $4 OR tenant_id IS NULL OR $4 IS NULL)
 		RETURNING server_name, version, status, status_changed_at, status_message, published_at, updated_at, is_latest
 	`
 
@@ -574,7 +608,7 @@ func (db *PostgreSQL) UpdateServer(ctx context.Context, tx pgx.Tx, serverName, v
 	var statusMessage *string
 	var isLatest bool
 
-	err = db.getExecutor(tx).QueryRow(ctx, query, valueJSON, serverName, version).Scan(&name, &vers, &status, &statusChangedAt, &statusMessage, &publishedAt, &updatedAt, &isLatest)
+	err = db.getExecutor(tx).QueryRow(ctx, query, valueJSON, serverName, version, tenantIDAny).Scan(&name, &vers, &status, &statusChangedAt, &statusMessage, &publishedAt, &updatedAt, &isLatest)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -606,6 +640,11 @@ func (db *PostgreSQL) SetServerStatus(ctx context.Context, tx pgx.Tx, serverName
 		return nil, ctx.Err()
 	}
 
+	var tenantIDAny any
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantIDAny = tid
+	}
+
 	// Update the status and related fields
 	// Only update status_changed_at when status actually changes
 	query := `
@@ -615,7 +654,7 @@ func (db *PostgreSQL) SetServerStatus(ctx context.Context, tx pgx.Tx, serverName
 			status_changed_at = CASE WHEN status != $1::varchar THEN NOW() ELSE status_changed_at END,
 			updated_at = NOW(),
 			status_message = $4
-		WHERE server_name = $2 AND version = $3
+		WHERE server_name = $2 AND version = $3 AND (tenant_id = $5 OR tenant_id IS NULL OR $5 IS NULL)
 		RETURNING server_name, version, status, value, published_at, updated_at, is_latest, status_changed_at, status_message
 	`
 
@@ -625,7 +664,7 @@ func (db *PostgreSQL) SetServerStatus(ctx context.Context, tx pgx.Tx, serverName
 	var valueJSON []byte
 	var resultStatusMessage *string
 
-	err := db.getExecutor(tx).QueryRow(ctx, query, string(status), serverName, version, statusMessage).Scan(&name, &vers, &currentStatus, &valueJSON, &publishedAt, &updatedAt, &isLatest, &statusChangedAt, &resultStatusMessage)
+	err := db.getExecutor(tx).QueryRow(ctx, query, string(status), serverName, version, statusMessage, tenantIDAny).Scan(&name, &vers, &currentStatus, &valueJSON, &publishedAt, &updatedAt, &isLatest, &statusChangedAt, &resultStatusMessage)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -663,6 +702,11 @@ func (db *PostgreSQL) SetAllVersionsStatus(ctx context.Context, tx pgx.Tx, serve
 		return nil, ctx.Err()
 	}
 
+	var tenantIDAny any
+	if tid := auth.TenantIDFromContext(ctx); tid != "" {
+		tenantIDAny = tid
+	}
+
 	// Update the status and related fields for all versions
 	// Only update rows where status or status_message actually changes
 	// Only update status_changed_at when status actually changes
@@ -674,11 +718,12 @@ func (db *PostgreSQL) SetAllVersionsStatus(ctx context.Context, tx pgx.Tx, serve
 			updated_at = NOW(),
 			status_message = $2
 		WHERE server_name = $3
+			AND (tenant_id = $4 OR tenant_id IS NULL OR $4 IS NULL)
 			AND (status != $1::varchar OR status_message IS DISTINCT FROM $2)
 		RETURNING server_name, version, status, value, published_at, updated_at, is_latest, status_changed_at, status_message
 	`
 
-	rows, err := db.getExecutor(tx).Query(ctx, query, string(status), statusMessage, serverName)
+	rows, err := db.getExecutor(tx).Query(ctx, query, string(status), statusMessage, serverName, tenantIDAny)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update all server versions status: %w", err)
 	}
