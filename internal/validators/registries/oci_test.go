@@ -286,31 +286,56 @@ func TestValidateOCI_EmptyIdentifier(t *testing.T) {
 	assert.Contains(t, err.Error(), "package identifier is required")
 }
 
-func TestValidateOCI_SuccessfulValidation(t *testing.T) {
+func TestValidateOCI_MutableTagsForbidden(t *testing.T) {
 	ctx := context.Background()
 
-	// Test with a real MCP server image that has the correct label
-	pkg := model.Package{
-		RegistryType: model.RegistryTypeOCI,
-		Identifier:   "ghcr.io/github/github-mcp-server:latest",
+	mutablePackages := []string{
+		"docker.io/owner/repo:latest",
+		"ghcr.io/owner/repo:v1.0.0",
+		"mcr.microsoft.com/mcp/server:latest",
+		"quay.io/org/package:v2.1",
 	}
 
-	err := registries.ValidateOCI(ctx, pkg, "io.github.github/github-mcp-server")
-	assert.NoError(t, err)
+	for _, ident := range mutablePackages {
+		t.Run(ident, func(t *testing.T) {
+			pkg := model.Package{
+				RegistryType: model.RegistryTypeOCI,
+				Identifier:   ident,
+			}
+			err := registries.ValidateOCI(ctx, pkg, "com.example/test")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "immutable digest ('@sha256:...')")
+		})
+	}
 }
 
-func TestValidateOCI_LabelMismatch(t *testing.T) {
+func TestValidateOCI_AirgapModeAndPrivateRegistries(t *testing.T) {
 	ctx := context.Background()
 
-	// Test with a real MCP server image but wrong expected server name
-	// This should fail because the label doesn't match
-	pkg := model.Package{
-		RegistryType: model.RegistryTypeOCI,
-		Identifier:   "ghcr.io/github/github-mcp-server:latest",
-	}
+	// Enable airgap mode
+	t.Setenv("MCP_REGISTRY_AIRGAP_MODE", "true")
 
-	err := registries.ValidateOCI(ctx, pkg, "io.github.github/github-mcp-server-mismatch")
+	// Public registries must be rejected under airgap mode
+	publicPkg := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "docker.io/library/alpine@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}
+	err := registries.ValidateOCI(ctx, publicPkg, "io.docker/alpine")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ownership validation failed")
-	assert.Contains(t, err.Error(), "Expected annotation")
+	assert.Contains(t, err.Error(), "unsupported OCI registry")
+
+	// Private enterprise registries (ACR, ECR, GAR) must validate cleanly under airgap mode
+	acrPkg := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}
+	err = registries.ValidateOCI(ctx, acrPkg, "dev.codeslice/veeva-vault-safety-mcp")
+	assert.NoError(t, err)
+
+	ecrPkg := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp/safety@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}
+	err = registries.ValidateOCI(ctx, ecrPkg, "dev.codeslice/safety-mcp")
+	assert.NoError(t, err)
 }

@@ -469,6 +469,39 @@
           "$ref": "#/definitions/Repository",
           "description": "Optional repository metadata for the MCP server source code. Recommended for transparency and security inspection."
         },
+        "securityProfile": {
+          "description": "Enterprise security profile for delegated authorization, HIC/Part 11, and data-pack integrity",
+          "properties": {
+            "blindingClearanceLevel": {
+              "description": "Clinical study blinding clearance level",
+              "type": "string"
+            },
+            "entraOboResource": {
+              "description": "Entra ID On-Behalf-Of target resource identifier (api://...)",
+              "type": "string"
+            },
+            "requiredDataPackDigests": {
+              "description": "SHA-256 content-addressed digests of mandatory data packs",
+              "items": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requiredDelegatedScopes": {
+              "description": "Required delegated permission scopes",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requiresHicBeforeWrite": {
+              "description": "Requires Human-in-the-Loop approval before write-back mutations",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
         "title": {
           "description": "Optional human-readable title or display name for the MCP server. MCP subregistries or clients MAY choose to use this for display purposes.",
           "example": "Weather API",

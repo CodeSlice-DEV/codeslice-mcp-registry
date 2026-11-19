@@ -42,9 +42,10 @@ type ServerJSON struct {
 	Version     string            `json:"version" minLength:"1" maxLength:"255" doc:"Version string for this server. SHOULD follow semantic versioning." example:"1.0.2"`
 	WebsiteURL  string            `json:"websiteUrl,omitempty" format:"uri" doc:"Optional URL to the server's homepage, documentation, or project website." example:"https://modelcontextprotocol.io/examples"`
 	Icons       []model.Icon      `json:"icons,omitempty" doc:"Optional set of sized icons that the client can display in a user interface."`
-	Packages    []model.Package   `json:"packages,omitempty" doc:"Array of package configurations"`
-	Remotes     []model.Transport `json:"remotes,omitempty" doc:"Array of remote configurations"`
-	Meta        *ServerMeta       `json:"_meta,omitempty" doc:"Extension metadata using reverse DNS namespacing for vendor-specific data"`
+	Packages        []model.Package        `json:"packages,omitempty" doc:"Array of package configurations"`
+	Remotes         []model.Transport      `json:"remotes,omitempty" doc:"Array of remote configurations"`
+	SecurityProfile *model.SecurityProfile `json:"securityProfile,omitempty" doc:"Enterprise security, Entra OBO delegated scope, and blinding clearance profile"`
+	Meta            *ServerMeta            `json:"_meta,omitempty" doc:"Extension metadata using reverse DNS namespacing for vendor-specific data"`
 }
 
 type Metadata struct {

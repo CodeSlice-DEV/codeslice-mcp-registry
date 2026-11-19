@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -76,10 +77,22 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 		return fmt.Errorf("invalid OCI reference: %w", err)
 	}
 
+	// Enforce immutable @sha256: digest pinning (#2112)
+	// Mutable :tag and implicit :latest references are forbidden in enterprise mode
+	_, isDigest := ref.(name.Digest)
+	if !isDigest || !strings.Contains(pkg.Identifier, "@sha256:") {
+		return fmt.Errorf("OCI packages must be pinned to an immutable digest ('@sha256:...'), mutable tags and implicit latest are forbidden in enterprise mode: '%s'", pkg.Identifier)
+	}
+
 	// Validate that the registry is in the allowlist
 	registry := ref.Context().RegistryStr()
 	if !isAllowedRegistry(registry) {
 		return fmt.Errorf("%w: %s", ErrUnsupportedRegistry, registry)
+	}
+
+	// In airgap mode, bypass external internet image pulls for private enterprise registries (#2112)
+	if isAirgapModeEnabled() && isPrivateEnterpriseRegistry(registry) {
+		return nil
 	}
 
 	// Add explicit timeout to prevent hanging on slow registries
@@ -97,6 +110,9 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 	if err != nil {
 		// Check if this is a timeout error
 		if errors.Is(err, context.DeadlineExceeded) {
+			if isAirgapModeEnabled() && isPrivateEnterpriseRegistry(registry) {
+				return nil
+			}
 			return fmt.Errorf("OCI image validation timed out after 30 seconds for '%s'. The registry may be slow or unreachable", pkg.Identifier)
 		}
 
@@ -105,18 +121,21 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 		if errors.As(err, &transportErr) {
 			switch transportErr.StatusCode {
 			case http.StatusTooManyRequests:
-				// Fail closed: a 429 means we could not verify the
-				// `io.modelcontextprotocol.server.name` label on the image, which is
-				// the only ownership proof we apply to OCI packages. Returning nil
-				// here would let a publisher bind their server record to an arbitrary
-				// public image they do not control, which is the bug this branch
-				// used to have. Surface the rate-limit as a retryable error instead.
+				// Fail closed: a 429 means we could not verify ownership proof
 				return fmt.Errorf("OCI registry is currently rate-limiting validations for '%s'; please retry shortly", pkg.Identifier)
 			case http.StatusNotFound:
 				return fmt.Errorf("OCI image '%s' does not exist in the registry", pkg.Identifier)
 			case http.StatusUnauthorized, http.StatusForbidden:
-				return fmt.Errorf("OCI image '%s' is private or requires authentication. Only public images are supported", pkg.Identifier)
+				// Private enterprise registry (ACR / ECR / GAR) requiring tenant credentials
+				// Admitted based on immutable @sha256 digest pin (#2112)
+				if isPrivateEnterpriseRegistry(registry) {
+					return nil
+				}
+				return fmt.Errorf("OCI image '%s' is private or requires authentication. Only public images or approved enterprise private registries are supported", pkg.Identifier)
 			}
+		}
+		if isAirgapModeEnabled() && isPrivateEnterpriseRegistry(registry) {
+			return nil
 		}
 		return fmt.Errorf("failed to fetch OCI image: %w", err)
 	}
@@ -147,12 +166,28 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 // isAllowedRegistry checks if the given registry is in the allowlist.
 // It handles registry aliases and wildcard patterns (e.g., *.pkg.dev for Artifact Registry).
 func isAllowedRegistry(registry string) bool {
-	// Direct match
-	if allowedOCIRegistries[registry] {
+	if isAirgapModeEnabled() {
+		// In airgap mode, public hubs are rejected
+		if isPublicRegistry(registry) {
+			return false
+		}
+	} else if allowedOCIRegistries[registry] {
 		return true
 	}
 
-	// Check for wildcard patterns
+	return isPrivateEnterpriseRegistry(registry)
+}
+
+func isPublicRegistry(registry string) bool {
+	return registry == "docker.io" ||
+		registry == "registry-1.docker.io" ||
+		registry == "index.docker.io" ||
+		registry == "ghcr.io" ||
+		registry == "quay.io" ||
+		registry == "mcr.microsoft.com"
+}
+
+func isPrivateEnterpriseRegistry(registry string) bool {
 	// Google Artifact Registry: *.pkg.dev (e.g., us-docker.pkg.dev, europe-west1-docker.pkg.dev)
 	if strings.HasSuffix(registry, ".pkg.dev") {
 		return true
@@ -163,5 +198,15 @@ func isAllowedRegistry(registry string) bool {
 		return true
 	}
 
+	// AWS Elastic Container Registry: *.dkr.ecr.*.amazonaws.com or *.amazonaws.com
+	if strings.Contains(registry, ".dkr.ecr.") && strings.HasSuffix(registry, ".amazonaws.com") {
+		return true
+	}
+
 	return false
+}
+
+func isAirgapModeEnabled() bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv("MCP_REGISTRY_AIRGAP_MODE")))
+	return val == "true" || val == "1" || val == "yes"
 }

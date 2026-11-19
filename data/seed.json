@@ -1,113 +1,96 @@
 [
   {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-    "name": "io.github.domdomegg/airtable-mcp-server",
-    "description": "Read and write access to Airtable database schemas, tables, and records.",
+    "name": "dev.codeslice/veeva-vault-safety-mcp",
+    "title": "Veeva Vault Safety MCP Connector",
+    "description": "Regulated pharmacovigilance intake and case safety inspection for Veeva Vault Safety.",
+    "version": "1.0.0",
     "repository": {
-      "url": "https://github.com/domdomegg/airtable-mcp-server.git",
+      "url": "https://github.com/CodeSlice-DEV/codeslice.git",
       "source": "github"
     },
-    "version": "1.7.2",
-    "icons": [
-      {
-        "src": "https://airtable.com/images/favicon/favicon-32x32.png",
-        "mimeType": "image/png",
-        "sizes": [
-          "32x32"
-        ]
-      }
-    ],
+    "securityProfile": {
+      "entraOboResource": "api://codeslice-pv-veeva-vault",
+      "requiredDelegatedScopes": [
+        "VeevaVault.Case.Read",
+        "VeevaVault.Case.Write"
+      ],
+      "requiresHicBeforeWrite": true,
+      "blindingClearanceLevel": "blinded_study",
+      "requiredDataPackDigests": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ]
+    },
     "packages": [
       {
-        "registryType": "npm",
-        "identifier": "airtable-mcp-server",
-        "version": "1.7.2",
-        "runtimeHint": "npx",
-        "transport": {
-          "type": "stdio"
-        },
-        "environmentVariables": [
-          {
-            "description": "Airtable personal access token (e.g., pat123.abc123). Create at https://airtable.com/create/tokens/new with scopes: schema.bases:read, data.records:read, and optionally schema.bases:write and data.records:write.",
-            "isRequired": true,
-            "isSecret": true,
-            "name": "AIRTABLE_API_KEY"
-          }
-        ]
-      },
-      {
         "registryType": "oci",
-        "identifier": "docker.io/domdomegg/airtable-mcp-server:1.7.2",
+        "identifier": "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "runtimeHint": "docker",
         "transport": {
           "type": "stdio"
-        },
-        "environmentVariables": [
-          {
-            "description": "Airtable personal access token (e.g., pat123.abc123). Create at https://airtable.com/create/tokens/new with scopes: schema.bases:read, data.records:read, and optionally schema.bases:write and data.records:write.",
-            "isRequired": true,
-            "isSecret": true,
-            "name": "AIRTABLE_API_KEY"
-          }
-        ]
-      },
-      {
-        "registryType": "mcpb",
-        "identifier": "https://github.com/domdomegg/airtable-mcp-server/releases/download/v1.7.2/airtable-mcp-server.mcpb",
-        "fileSha256": "8220de07a08ebe908f04da139ea03dbfe29758141347e945da60535fb7bcca20",
-        "transport": {
-          "type": "stdio"
         }
       }
     ]
   },
   {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-    "name": "io.github.domdomegg/airtable-mcp-server",
-    "description": "Read and write access to Airtable database schemas, tables, and records.",
+    "name": "dev.codeslice/oracle-argus-safety-mcp",
+    "title": "Oracle Argus Safety Enterprise Connector",
+    "description": "Enterprise E2B(R3) ICSR intake, reconciliation, and expedited safety reporting for Oracle Argus Safety.",
+    "version": "1.0.0",
     "repository": {
-      "url": "https://github.com/domdomegg/airtable-mcp-server.git",
+      "url": "https://github.com/CodeSlice-DEV/codeslice.git",
       "source": "github"
     },
-    "version": "1.7.3",
+    "securityProfile": {
+      "entraOboResource": "api://codeslice-pv-oracle-argus",
+      "requiredDelegatedScopes": [
+        "ArgusSafety.ICSR.Read",
+        "ArgusSafety.Expedited.Write"
+      ],
+      "requiresHicBeforeWrite": true,
+      "blindingClearanceLevel": "unblinded",
+      "requiredDataPackDigests": [
+        "ca978112ca1bbdcafac231b39a23dc4da78608149614097b6004fb68640fa67e"
+      ]
+    },
     "packages": [
       {
-        "registryType": "npm",
-        "identifier": "airtable-mcp-server",
-        "version": "1.7.3",
-        "runtimeHint": "npx",
-        "transport": {
-          "type": "stdio"
-        },
-        "environmentVariables": [
-          {
-            "description": "Airtable personal access token (e.g., pat123.abc123). Create at https://airtable.com/create/tokens/new with scopes: schema.bases:read, data.records:read, and optionally schema.bases:write and data.records:write.",
-            "isRequired": true,
-            "isSecret": true,
-            "name": "AIRTABLE_API_KEY"
-          }
-        ]
-      },
-      {
         "registryType": "oci",
-        "identifier": "docker.io/domdomegg/airtable-mcp-server:1.7.3",
+        "identifier": "acrcodeslicereadiness.azurecr.io/mcp/oracle-argus-safety@sha256:ca978112ca1bbdcafac231b39a23dc4da78608149614097b6004fb68640fa67e",
         "runtimeHint": "docker",
         "transport": {
           "type": "stdio"
-        },
-        "environmentVariables": [
-          {
-            "description": "Airtable personal access token (e.g., pat123.abc123). Create at https://airtable.com/create/tokens/new with scopes: schema.bases:read, data.records:read, and optionally schema.bases:write and data.records:write.",
-            "isRequired": true,
-            "isSecret": true,
-            "name": "AIRTABLE_API_KEY"
-          }
-        ]
-      },
+        }
+      }
+    ]
+  },
+  {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "dev.codeslice/pmc-offline-corpus-mcp",
+    "title": "PubMed Central Offline Medical Corpus MCP Server",
+    "description": "Air-gapped medical literature retrieval and citation crosswalk against pinned PMC open-access XML corpus.",
+    "version": "1.0.0",
+    "repository": {
+      "url": "https://github.com/CodeSlice-DEV/codeslice.git",
+      "source": "github"
+    },
+    "securityProfile": {
+      "entraOboResource": "api://codeslice-lit-pmc",
+      "requiredDelegatedScopes": [
+        "Literature.Search.Read"
+      ],
+      "requiresHicBeforeWrite": false,
+      "blindingClearanceLevel": "public",
+      "requiredDataPackDigests": [
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      ]
+    },
+    "packages": [
       {
-        "registryType": "mcpb",
-        "identifier": "https://github.com/domdomegg/airtable-mcp-server/releases/download/v1.7.3/airtable-mcp-server.mcpb",
-        "fileSha256": "0f28a9129cfebd262dfb77854c872355d21401bb3e056575b3027081f5d570ca",
+        "registryType": "oci",
+        "identifier": "acrcodeslicereadiness.azurecr.io/mcp/pmc-offline-corpus@sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "runtimeHint": "docker",
         "transport": {
           "type": "stdio"
         }
@@ -116,19 +99,30 @@
   },
   {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-    "name": "io.github.domdomegg/time-mcp-nuget",
-    "description": "Get the current UTC time in RFC 3339 format.",
+    "name": "dev.codeslice/clinicaltrials-offline-mcp",
+    "title": "ClinicalTrials.gov Protocol & Registry Offline Server",
+    "description": "Air-gapped clinical trial protocol inspection, NCT ID resolution, and interventional study cohort indexing.",
+    "version": "1.0.0",
     "repository": {
-      "url": "https://github.com/domdomegg/time-mcp-nuget.git",
+      "url": "https://github.com/CodeSlice-DEV/codeslice.git",
       "source": "github"
     },
-    "version": "1.0.8",
+    "securityProfile": {
+      "entraOboResource": "api://codeslice-trials-gov",
+      "requiredDelegatedScopes": [
+        "ClinicalTrials.Protocol.Read"
+      ],
+      "requiresHicBeforeWrite": false,
+      "blindingClearanceLevel": "public",
+      "requiredDataPackDigests": [
+        "f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2"
+      ]
+    },
     "packages": [
       {
-        "registryType": "nuget",
-        "identifier": "TimeMcpServer",
-        "version": "1.0.8",
-        "runtimeHint": "dnx",
+        "registryType": "oci",
+        "identifier": "acrcodeslicereadiness.azurecr.io/mcp/clinicaltrials-offline@sha256:f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2",
+        "runtimeHint": "docker",
         "transport": {
           "type": "stdio"
         }
@@ -137,19 +131,30 @@
   },
   {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-    "name": "io.github.domdomegg/time-mcp-pypi",
-    "description": "Get the current UTC time in RFC 3339 format.",
+    "name": "dev.codeslice/meddra-crosswalk-offline-mcp",
+    "title": "MedDRA Regulatory Terminology & PT/SOC Crosswalk Server",
+    "description": "Certified MedDRA v27.0 hierarchical adverse event encoding, SMQ scoping, and preferred term standardization.",
+    "version": "1.0.0",
     "repository": {
-      "url": "https://github.com/domdomegg/time-mcp-pypi.git",
+      "url": "https://github.com/CodeSlice-DEV/codeslice.git",
       "source": "github"
     },
-    "version": "1.0.6",
+    "securityProfile": {
+      "entraOboResource": "api://codeslice-pv-meddra",
+      "requiredDelegatedScopes": [
+        "MedDRA.Terminology.Read"
+      ],
+      "requiresHicBeforeWrite": false,
+      "blindingClearanceLevel": "unblinded",
+      "requiredDataPackDigests": [
+        "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+      ]
+    },
     "packages": [
       {
-        "registryType": "pypi",
-        "identifier": "time-mcp-pypi",
-        "version": "1.0.6",
-        "runtimeHint": "python",
+        "registryType": "oci",
+        "identifier": "acrcodeslicereadiness.azurecr.io/mcp/meddra-crosswalk-offline@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+        "runtimeHint": "docker",
         "transport": {
           "type": "stdio"
         }
