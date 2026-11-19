@@ -36,7 +36,7 @@ jobs:
       run: make build
 
     - name: Run govulncheck
-      uses: golang/govulncheck-action@b832a0937a092825832a84a6b29d4db7a9561b0c # v1
+      uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
       with:
         go-version-input: 'stable'
         go-package: ./...

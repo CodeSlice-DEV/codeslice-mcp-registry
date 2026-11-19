@@ -24,17 +24,7 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 	// Create JWT manager for token validation
 	jwtManager := auth.NewJWTManager(cfg)
 
-	huma.Register(api, huma.Operation{
-		OperationID: "publish-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
-		Method:      http.MethodPost,
-		Path:        pathPrefix + "/publish",
-		Summary:     "Publish MCP server",
-		Description: "Publish a new MCP server to the registry or update an existing one",
-		Tags:        []string{"publish"},
-		Security: []map[string][]string{
-			{securitySchemeBearer: {}},
-		},
-	}, func(ctx context.Context, input *PublishServerInput) (*Response[apiv0.ServerResponse], error) {
+	handler := func(ctx context.Context, input *PublishServerInput) (*Response[apiv0.ServerResponse], error) {
 		// Extract bearer token
 		const bearerPrefix = "Bearer "
 		authHeader := input.Authorization
@@ -81,7 +71,31 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 		return &Response[apiv0.ServerResponse]{
 			Body: *publishedServer,
 		}, nil
-	})
+	}
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodPost,
+		Path:        pathPrefix + "/publish",
+		Summary:     "Publish MCP server",
+		Description: "Publish a new MCP server to the registry or update an existing one",
+		Tags:        []string{"publish"},
+		Security: []map[string][]string{
+			{securitySchemeBearer: {}},
+		},
+	}, handler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-server-alias" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodPost,
+		Path:        pathPrefix + "/servers",
+		Summary:     "Publish MCP server (alias)",
+		Description: "Publish a new MCP server to the registry or update an existing one",
+		Tags:        []string{"publish"},
+		Security: []map[string][]string{
+			{securitySchemeBearer: {}},
+		},
+	}, handler)
 }
 
 // buildPermissionErrorMessage creates a detailed error message showing what permissions

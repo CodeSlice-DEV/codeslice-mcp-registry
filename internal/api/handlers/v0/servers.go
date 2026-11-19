@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,23 @@ const (
 type OptionalBool struct {
 	Value bool
 	IsSet bool
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for Huma query parameter decoding
+func (o *OptionalBool) UnmarshalText(text []byte) error {
+	str := strings.TrimSpace(string(text))
+	if str == "" {
+		o.Value = false
+		o.IsSet = false
+		return nil
+	}
+	val, err := strconv.ParseBool(str)
+	if err != nil {
+		return err
+	}
+	o.Value = val
+	o.IsSet = true
+	return nil
 }
 
 // resolveIncludeDeleted handles the include_deleted parameter logic for list endpoints
@@ -113,8 +131,46 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 	}
 
 	registerListServersEndpoint(api, pathPrefix, registry, activeCfg)
+	registerGetServerDetailEndpoint(api, pathPrefix, registry, activeCfg)
 	registerGetServerVersionEndpoint(api, pathPrefix, registry, activeCfg)
 	registerGetServerVersionsEndpoint(api, pathPrefix, registry, activeCfg)
+}
+
+func registerGetServerDetailEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
+	huma.Register(api, huma.Operation{
+		OperationID: "get-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodGet,
+		Path:        pathPrefix + "/servers/{serverName}",
+		Summary:     "Get MCP server details",
+		Description: "Get detailed information about the latest version of an MCP server",
+		Tags:        []string{tagServers},
+	}, func(ctx context.Context, input *ServerDetailInput) (*Response[apiv0.ServerResponse], error) {
+		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
+		if tenantID != "" {
+			ctx = auth.WithTenantID(ctx, tenantID)
+		}
+
+		serverName, err := url.PathUnescape(input.ServerName)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid server name encoding", err)
+		}
+
+		serverResponse, err := registry.GetServerByName(ctx, serverName, false)
+		if err != nil {
+			if err.Error() == errRecordNotFound || errors.Is(err, database.ErrNotFound) {
+				return nil, huma.Error404NotFound("Server not found")
+			}
+			log.Printf("get server details (%q) failed: %v", serverName, err)
+			return nil, huma.Error500InternalServerError("Failed to get server details")
+		}
+
+		return &Response[apiv0.ServerResponse]{
+			Body: *serverResponse,
+		}, nil
+	})
 }
 
 func registerListServersEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
