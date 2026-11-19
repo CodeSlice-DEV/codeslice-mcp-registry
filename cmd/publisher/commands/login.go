@@ -1,3 +1,6 @@
+// Copyright (c) CODESLICE IT SOLUTIONS PRIVATE LIMITED.
+// SPDX-License-Identifier: LicenseRef-Prosperity-3.0.0
+
 package commands
 
 import (
@@ -11,15 +14,13 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/registry/cmd/publisher/auth"
-	"github.com/modelcontextprotocol/registry/cmd/publisher/auth/azurekeyvault"
-	"github.com/modelcontextprotocol/registry/cmd/publisher/auth/googlekms"
+	"github.com/modelcontextprotocol/registry/cmd/publisher/auth/openbao"
 )
 
 const (
 	DefaultRegistryURL  = "https://registry.modelcontextprotocol.io"
 	LegacyTokenFileName = ".mcp_publisher_token" //nolint:gosec // Not a credential, just a filename
-	MethodGitHub        = "github"
-	MethodGitHubOIDC    = "github-oidc"
+	MethodKeycloak      = "keycloak"
 	MethodDNS           = "dns"
 	MethodHTTP          = "http"
 	MethodNone          = "none"
@@ -60,23 +61,23 @@ type CryptoAlgorithm auth.CryptoAlgorithm
 type SignerType string
 
 type LoginFlags struct {
-	Domain          string
-	PrivateKey      string
-	RegistryURL     string
-	KvVault         string
-	KvKeyName       string
-	KmsResource     string
-	Token           Token
-	CryptoAlgorithm CryptoAlgorithm
-	SignerType      SignerType
-	ArgOffset       int
+	Domain           string
+	PrivateKey       string
+	RegistryURL      string
+	OpenBaoAddr      string
+	OpenBaoKey       string
+	OpenBaoToken     string
+	KeycloakIssuer   string
+	KeycloakClientID string
+	CryptoAlgorithm  CryptoAlgorithm
+	SignerType       SignerType
+	ArgOffset        int
 }
 
 const (
-	InProcessSignerType     SignerType = "in-process"
-	AzureKeyVaultSignerType SignerType = "azure-key-vault"
-	GoogleKMSSignerType     SignerType = "google-kms"
-	NoSignerType            SignerType = "none"
+	InProcessSignerType SignerType = "in-process"
+	OpenBaoSignerType   SignerType = "openbao"
+	NoSignerType        SignerType = "none"
 )
 
 func (c *CryptoAlgorithm) String() string {
@@ -85,14 +86,15 @@ func (c *CryptoAlgorithm) String() string {
 
 func (c *CryptoAlgorithm) Set(v string) error {
 	switch v {
-	case string(auth.AlgorithmEd25519), string(auth.AlgorithmECDSAP384):
-		*c = CryptoAlgorithm(v)
+	case string(auth.AlgorithmEd25519):
+		*c = CryptoAlgorithm(auth.AlgorithmEd25519)
+		return nil
+	case string(auth.AlgorithmECDSAP384):
+		*c = CryptoAlgorithm(auth.AlgorithmECDSAP384)
 		return nil
 	}
 	return fmt.Errorf("invalid algorithm: %q (allowed: ed25519, ecdsap384)", v)
 }
-
-type Token string
 
 func parseLoginFlags(method string, args []string) (LoginFlags, error) {
 	var flags LoginFlags
@@ -102,24 +104,19 @@ func parseLoginFlags(method string, args []string) (LoginFlags, error) {
 	flags.ArgOffset = 1
 	loginFlags.StringVar(&flags.RegistryURL, "registry", DefaultRegistryURL, "Registry URL")
 
-	// Add --token flag for GitHub authentication
-	var token string
-	if method == MethodGitHub {
-		loginFlags.StringVar(&token, "token", "", "GitHub Personal Access Token")
+	if method == MethodKeycloak {
+		loginFlags.StringVar(&flags.KeycloakIssuer, "issuer", "", "Keycloak OIDC issuer URL")
+		loginFlags.StringVar(&flags.KeycloakClientID, "client-id", "", "Keycloak OIDC client ID")
 	}
 
-	if method == "dns" || method == "http" {
+	if method == MethodDNS || method == MethodHTTP {
 		loginFlags.StringVar(&flags.Domain, "domain", "", "Domain name")
 		if len(args) > 1 {
-			switch args[1] {
-			case string(AzureKeyVaultSignerType):
-				flags.SignerType = AzureKeyVaultSignerType
-				loginFlags.StringVar(&flags.KvVault, "vault", "", "The name of the Azure Key Vault resource")
-				loginFlags.StringVar(&flags.KvKeyName, "key", "", "Name of the signing key in the Azure Key Vault")
-				flags.ArgOffset = 2
-			case string(GoogleKMSSignerType):
-				flags.SignerType = GoogleKMSSignerType
-				loginFlags.StringVar(&flags.KmsResource, "resource", "", "Google Cloud KMS resource name (e.g. projects/lotr/locations/global/keyRings/fellowship/cryptoKeys/frodo/cryptoKeyVersions/1)")
+			if args[1] == string(OpenBaoSignerType) {
+				flags.SignerType = OpenBaoSignerType
+				loginFlags.StringVar(&flags.OpenBaoAddr, "openbao-addr", "", "OpenBao address (e.g. http://127.0.0.1:8200)")
+				loginFlags.StringVar(&flags.OpenBaoKey, "openbao-key", "", "OpenBao Transit key name")
+				loginFlags.StringVar(&flags.OpenBaoToken, "openbao-token", "", "OpenBao access token")
 				flags.ArgOffset = 2
 			}
 		}
@@ -134,20 +131,16 @@ func parseLoginFlags(method string, args []string) (LoginFlags, error) {
 		flags.RegistryURL = strings.TrimRight(flags.RegistryURL, "/")
 	}
 
-	// Store the token in flags if it was provided
-	if method == MethodGitHub {
-		flags.Token = Token(token)
-	}
-
 	return flags, err
 }
 
 func createSigner(flags LoginFlags) (auth.Signer, error) {
 	switch flags.SignerType {
-	case AzureKeyVaultSignerType:
-		return azurekeyvault.GetSignatureProvider(flags.KvVault, flags.KvKeyName)
-	case GoogleKMSSignerType:
-		return googlekms.GetSignatureProvider(flags.KmsResource)
+	case OpenBaoSignerType:
+		if flags.OpenBaoAddr == "" || flags.OpenBaoKey == "" {
+			return nil, errors.New("openbao signing requires --openbao-addr and --openbao-key")
+		}
+		return openbao.NewSigner(flags.OpenBaoAddr, flags.OpenBaoToken, flags.OpenBaoKey)
 	case InProcessSignerType:
 		return auth.NewInProcessSigner(flags.PrivateKey, auth.CryptoAlgorithm(flags.CryptoAlgorithm))
 	case NoSignerType:
@@ -157,12 +150,10 @@ func createSigner(flags LoginFlags) (auth.Signer, error) {
 	}
 }
 
-func createAuthProvider(method, registryURL, domain string, token Token, signer auth.Signer) (auth.Provider, error) {
+func createAuthProvider(method, registryURL, domain string, flags LoginFlags, signer auth.Signer) (auth.Provider, error) {
 	switch method {
-	case MethodGitHub:
-		return auth.NewGitHubATProvider(registryURL, string(token)), nil
-	case MethodGitHubOIDC:
-		return auth.NewGitHubOIDCProvider(registryURL), nil
+	case MethodKeycloak:
+		return auth.NewKeycloakProvider(registryURL, flags.KeycloakIssuer, flags.KeycloakClientID), nil
 	case MethodDNS:
 		if domain == "" {
 			return nil, errors.New("dns authentication requires --domain")
@@ -187,43 +178,27 @@ func LoginCommand(args []string) error {
 Usage: mcp-publisher login <method> [<signing provider>]
 
 Methods:
-  github            Interactive GitHub authentication
-  github-oidc       GitHub Actions OIDC authentication
+  keycloak          Keycloak RFC 8628 OAuth 2.0 Device Authorization Grant
   dns               DNS-based authentication (requires --domain)
   http              HTTP-based authentication (requires --domain)
   none              Anonymous authentication (for testing)
 
 Signing providers:
-  azure-key-vault   Sign using Azure Key Vault
-  google-kms        Sign using Google Cloud KMS
+  openbao           Sign using OpenSSF OpenBao Transit engine
 
-The dns and http methods require a --private-key for in-process signing. For
-out-of-process signing, use one of the supported signing providers. Signing is
-needed for an authentication challenge with the registry.
-
-The github and github-oidc methods do not support signing providers and
-authenticate using the GitHub as an identity provider.
+The dns and http methods require a signing provider (openbao) or --private-key for in-process signing.
+Signing is needed for an authentication challenge with the registry.
 
 Examples:
 
-  # Interactive GitHub login, using device code flow
-  mcp-publisher login github
-  
+  # Interactive Keycloak login, using RFC 8628 device flow
+  mcp-publisher login keycloak --issuer https://auth.codeslice.dev/realms/codeslice --client-id codeslice-publisher
+
+  # Sign in using OpenBao Transit for DNS authentication
+  mcp-publisher login dns openbao --domain example.com --openbao-addr http://openbao.security.svc:8200 --openbao-key publisher-signer
+
   # Sign in using a specific Ed25519 private key for DNS authentication
-  mcp-publisher login dns -algorithm ed25519 -domain example.com -private-key <64 hex chars>
-
-  # Sign in using a specific ECDSA P-384 private key for DNS authentication
-  mcp-publisher login dns -algorithm ecdsap384 -domain example.com -private-key <96 hex chars>
-  
-  # Sign in with gcloud CLI, use Google Cloud KMS for signing in DNS authentication
-  gcloud auth application-default login
-  mcp-publisher login dns google-kms -domain example.com -resource projects/lotr/locations/global/keyRings/fellowship/cryptoKeys/frodo/cryptoKeyVersions/1
-
-  # Sign in with az CLI, use Azure Key Vault for signing in HTTP authentication
-  az login
-  mcp-publisher login http azure-key-vault -domain example.com -vault myvault -key mysigningkey
-
-  `)
+  mcp-publisher login dns -algorithm ed25519 -domain example.com -private-key <64 hex chars>`)
 	}
 
 	method := args[0]
@@ -240,7 +215,7 @@ Examples:
 		}
 	}
 
-	authProvider, err := createAuthProvider(method, flags.RegistryURL, flags.Domain, flags.Token, signer)
+	authProvider, err := createAuthProvider(method, flags.RegistryURL, flags.Domain, flags, signer)
 	if err != nil {
 		return err
 	}

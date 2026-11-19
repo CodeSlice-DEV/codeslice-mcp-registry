@@ -314,3 +314,35 @@ func TestValidateOCI_LabelMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "ownership validation failed")
 	assert.Contains(t, err.Error(), "Expected annotation")
 }
+
+func TestValidateOCI_HarborAndCustomRegistries(t *testing.T) {
+	ctx := context.Background()
+
+	// Custom allowlist via env enabling CNCF Harbor and Distribution
+	t.Setenv("MCP_REGISTRY_ALLOWED_OCI_REGISTRIES", "harbor.example.com,custom-distribution.org,*.internal.net")
+
+	pkgHarbor := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "harbor.example.com/project/server:1.0.0",
+	}
+	err := registries.ValidateOCI(ctx, pkgHarbor, "com.example/server")
+	// Should fail with network error/image not found, NOT unsupported registry
+	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), "unsupported OCI registry")
+
+	pkgCustom := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "custom-distribution.org/myorg/mcp:v1",
+	}
+	errCustom := registries.ValidateOCI(ctx, pkgCustom, "org.myorg/mcp")
+	assert.Error(t, errCustom)
+	assert.NotContains(t, errCustom.Error(), "unsupported OCI registry")
+
+	pkgWildcard := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "registry.internal.net/myorg/mcp:v1",
+	}
+	errWildcard := registries.ValidateOCI(ctx, pkgWildcard, "org.myorg/mcp")
+	assert.Error(t, errWildcard)
+	assert.NotContains(t, errWildcard.Error(), "unsupported OCI registry")
+}

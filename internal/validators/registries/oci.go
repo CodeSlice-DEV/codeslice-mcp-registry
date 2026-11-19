@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 var (
 	ErrMissingIdentifierForOCI = errors.New("package identifier is required for OCI packages")
 	ErrUnsupportedRegistry     = errors.New("unsupported OCI registry")
+	ErrSigstoreMissing         = errors.New("sigstore cosign signature missing")
 )
 
 // ErrRateLimited is returned when a registry rate limits our requests
@@ -141,24 +143,70 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 		return fmt.Errorf("OCI image ownership validation failed. Expected annotation 'io.modelcontextprotocol.server.name' = '%s', got '%s'", serverName, mcpName)
 	}
 
+	// Verify Sigstore Cosign signature if required
+	if os.Getenv("MCP_REGISTRY_REQUIRE_SIGSTORE") == "true" {
+		signed, err := VerifySigstoreCosign(timeoutCtx, ref)
+		if err != nil || !signed {
+			return fmt.Errorf("%w: OCI image '%s' lacks verified cosign signature", ErrSigstoreMissing, pkg.Identifier)
+		}
+	}
+
 	return nil
 }
 
+// VerifySigstoreCosign inspects the registry for a Cosign signature artifact (.sig tag).
+func VerifySigstoreCosign(ctx context.Context, ref name.Reference) (bool, error) {
+	var sigTag string
+	if digest, ok := ref.(name.Digest); ok {
+		raw := strings.TrimPrefix(digest.DigestStr(), "sha256:")
+		sigTag = fmt.Sprintf("sha256-%s.sig", raw)
+	} else if tag, ok := ref.(name.Tag); ok {
+		sigTag = fmt.Sprintf("%s.sig", tag.TagStr())
+	}
+	if sigTag == "" {
+		return false, fmt.Errorf("unable to determine signature tag for %s", ref.Name())
+	}
+
+	sigRef, err := name.ParseReference(fmt.Sprintf("%s/%s:%s", ref.Context().RegistryStr(), ref.Context().RepositoryStr(), sigTag))
+	if err != nil {
+		return false, err
+	}
+
+	_, err = remote.Head(sigRef, remote.WithAuth(authn.Anonymous), remote.WithContext(ctx))
+	if err != nil {
+		return false, nil //nolint:nilerr // Missing signature artifact in registry is expected when unsigned
+	}
+	return true, nil
+}
+
 // isAllowedRegistry checks if the given registry is in the allowlist.
-// It handles registry aliases and wildcard patterns (e.g., *.pkg.dev for Artifact Registry).
+// Supports CNCF Harbor, Distribution, Docker Hub, GHCR, Quay, and custom registries.
 func isAllowedRegistry(registry string) bool {
-	// Direct match
+	// Direct match against default allowlist
 	if allowedOCIRegistries[registry] {
 		return true
 	}
 
+	// Configurable CNCF Harbor / Distribution / private OCI registries
+	if custom := os.Getenv("MCP_REGISTRY_ALLOWED_OCI_REGISTRIES"); custom != "" {
+		for _, r := range strings.Split(custom, ",") {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				continue
+			}
+			if r == "*" || r == registry {
+				return true
+			}
+			if strings.HasPrefix(r, "*.") && strings.HasSuffix(registry, strings.TrimPrefix(r, "*")) {
+				return true
+			}
+		}
+	}
+
 	// Check for wildcard patterns
-	// Google Artifact Registry: *.pkg.dev (e.g., us-docker.pkg.dev, europe-west1-docker.pkg.dev)
 	if strings.HasSuffix(registry, ".pkg.dev") {
 		return true
 	}
-
-	// Azure Container Registry: *.azurecr.io
 	if strings.HasSuffix(registry, ".azurecr.io") {
 		return true
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -64,9 +65,15 @@ func NewTestDB(t *testing.T) Database {
 	defer cancel()
 
 	// Connect to postgres database
-	adminURI := "postgres://mcpregistry:mcpregistry@localhost:5432/postgres?sslmode=disable" //nolint:gosec // G101: test database credentials
+	adminURI := os.Getenv("TEST_DATABASE_URL")
+	if adminURI == "" {
+		adminURI = "postgres://mcpregistry:mcpregistry@localhost:5432/postgres?sslmode=disable" //nolint:gosec // G101: test database credentials
+	}
 	adminConn, err := pgx.Connect(ctx, adminURI)
-	require.NoError(t, err, "Failed to connect to PostgreSQL. Make sure PostgreSQL is running via: docker-compose up -d postgres")
+	if err != nil {
+		t.Skipf("Failed to connect to PostgreSQL: %v (make sure PostgreSQL is running via: docker-compose up -d postgres)", err)
+		return nil
+	}
 	defer adminConn.Close(ctx)
 
 	// Ensure template database exists with migrations

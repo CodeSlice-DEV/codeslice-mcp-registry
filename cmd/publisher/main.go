@@ -107,14 +107,13 @@ func printCommandHelp(command string) bool {
 		_, _ = fmt.Fprintln(os.Stdout, "  mcp-publisher login <method> [options]")
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintln(os.Stdout, "Methods:")
-		_, _ = fmt.Fprintln(os.Stdout, "  github        Interactive GitHub authentication")
-		_, _ = fmt.Fprintln(os.Stdout, "  github-oidc   GitHub Actions OIDC authentication")
+		_, _ = fmt.Fprintln(os.Stdout, "  keycloak      Keycloak RFC 8628 OAuth 2.0 Device Authorization Grant")
 		_, _ = fmt.Fprintln(os.Stdout, "  dns           DNS-based authentication (requires --domain)")
 		_, _ = fmt.Fprintln(os.Stdout, "  http          HTTP-based authentication (requires --domain)")
 		_, _ = fmt.Fprintln(os.Stdout, "  none          Anonymous authentication (for testing)")
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintln(os.Stdout, "Examples:")
-		_, _ = fmt.Fprintln(os.Stdout, "  mcp-publisher login github")
+		_, _ = fmt.Fprintln(os.Stdout, "  mcp-publisher login keycloak")
 		_, _ = fmt.Fprintln(os.Stdout, "  mcp-publisher login dns --domain example.com --private-key <key>")
 
 	case "logout":
