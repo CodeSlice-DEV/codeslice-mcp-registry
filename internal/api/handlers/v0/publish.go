@@ -49,6 +49,10 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 			return nil, huma.Error401Unauthorized("Invalid or expired Registry JWT token", err)
 		}
 
+		if claims != nil && claims.TenantID != "" {
+			ctx = auth.WithTenantID(ctx, claims.TenantID)
+		}
+
 		// Verify that the token has permission to publish the server
 		if !jwtManager.HasPermission(input.Body.Name, auth.PermissionActionPublish, claims.Permissions) {
 			return nil, huma.Error403Forbidden(buildPermissionErrorMessage(input.Body.Name, claims.Permissions))
