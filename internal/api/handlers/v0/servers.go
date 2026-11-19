@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,23 @@ const (
 type OptionalBool struct {
 	Value bool
 	IsSet bool
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler for Huma query parameter decoding
+func (o *OptionalBool) UnmarshalText(text []byte) error {
+	str := strings.TrimSpace(string(text))
+	if str == "" {
+		o.Value = false
+		o.IsSet = false
+		return nil
+	}
+	val, err := strconv.ParseBool(str)
+	if err != nil {
+		return err
+	}
+	o.Value = val
+	o.IsSet = true
+	return nil
 }
 
 // resolveIncludeDeleted handles the include_deleted parameter logic for list endpoints

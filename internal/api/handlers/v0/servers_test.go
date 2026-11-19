@@ -768,3 +768,38 @@ func TestIncludeDeletedOnDetailEndpoints(t *testing.T) {
 		}
 	})
 }
+
+func TestOptionalBoolUnmarshalText(t *testing.T) {
+	tests := []struct {
+		input       string
+		expectedVal bool
+		expectedSet bool
+		expectErr   bool
+	}{
+		{"true", true, true, false},
+		{"false", false, true, false},
+		{"1", true, true, false},
+		{"0", false, true, false},
+		{"t", true, true, false},
+		{"f", false, true, false},
+		{"TRUE", true, true, false},
+		{"FALSE", false, true, false},
+		{"", false, false, false},
+		{"   ", false, false, false},
+		{"invalid", false, false, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			var opt v0.OptionalBool
+			err := opt.UnmarshalText([]byte(tt.input))
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedVal, opt.Value)
+				assert.Equal(t, tt.expectedSet, opt.IsSet)
+			}
+		})
+	}
+}
