@@ -186,3 +186,19 @@ func TestValidateMCPB_OptionalFields(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMCPB_AirgapMode(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MCP_REGISTRY_AIRGAP_MODE", "true")
+
+	pkg := model.Package{
+		RegistryType: model.RegistryTypeMCPB,
+		Identifier:   "https://github.com/domdomegg/airtable-mcp-server/releases/download/v1.7.2/airtable-mcp-server.mcpb",
+		Version:      "1.7.2",
+		FileSHA256:   "8220de07a08ebe908f04da139ea03dbfe29758141347e945da60535fb7bcca20",
+	}
+
+	err := registries.ValidateMCPB(ctx, pkg, "io.github.domdomegg/airtable-mcp-server")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "public registry is forbidden in air-gap mode")
+}

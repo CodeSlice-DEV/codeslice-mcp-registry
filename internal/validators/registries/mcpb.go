@@ -40,6 +40,11 @@ func ValidateMCPB(ctx context.Context, pkg model.Package, _ string) error {
 		return err
 	}
 
+	// In airgap mode, public internet hosts (github.com, gitlab.com) are forbidden
+	if IsAirgapModeEnabled() {
+		return fmt.Errorf("%w: public MCPB release hosting ('%s') is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.Identifier)
+	}
+
 	// Parse the URL to validate format
 	url, err := url.Parse(pkg.Identifier)
 	if err != nil {

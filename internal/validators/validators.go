@@ -9,8 +9,15 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/registry/internal/config"
+	"github.com/modelcontextprotocol/registry/internal/validators/registries"
 	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 	"github.com/modelcontextprotocol/registry/pkg/model"
+)
+
+// Security profile validation patterns
+var (
+	scopeFormatRegex   = regexp.MustCompile(`^[a-zA-Z0-9_.:/-]+$`)
+	dataPackHex64Regex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
 // Server name validation patterns
@@ -111,6 +118,12 @@ func ValidateServerJSON(serverJSON *apiv0.ServerJSON, opts ValidationOptions) *V
 	for i, remote := range serverJSON.Remotes {
 		remoteResult := validateRemoteTransport(ctx.Field("remotes").Index(i), &remote)
 		result.Merge(remoteResult)
+	}
+
+	// Validate securityProfile if provided (#2112)
+	if serverJSON.SecurityProfile != nil {
+		securityResult := validateSecurityProfile(ctx.Field("securityProfile"), serverJSON.SecurityProfile)
+		result.Merge(securityResult)
 	}
 
 	return result
@@ -738,4 +751,80 @@ func parseServerName(serverJSON apiv0.ServerJSON) (string, error) {
 	}
 
 	return name, nil
+}
+
+func validateSecurityProfile(ctx *ValidationContext, profile *model.SecurityProfile) *ValidationResult {
+	result := &ValidationResult{Valid: true, Issues: []ValidationIssue{}}
+	if profile == nil {
+		return result
+	}
+
+	// Validate EntraOboResource
+	if profile.EntraOboResource != "" {
+		if !strings.HasPrefix(profile.EntraOboResource, "api://") && !strings.HasPrefix(profile.EntraOboResource, "https://") {
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("entraOboResource").String(),
+				ErrInvalidEntraResource,
+				"invalid-entra-obo-resource",
+			))
+		}
+	}
+
+	// Validate RequiredDelegatedScopes
+	for i, scope := range profile.RequiredDelegatedScopes {
+		trimmed := strings.TrimSpace(scope)
+		if trimmed == "" {
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("requiredDelegatedScopes").Index(i).String(),
+				ErrEmptyDelegatedScope,
+				"empty-delegated-scope",
+			))
+		} else if !scopeFormatRegex.MatchString(trimmed) {
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("requiredDelegatedScopes").Index(i).String(),
+				fmt.Errorf("%w: '%s'", ErrInvalidScopeFormat, trimmed),
+				"invalid-delegated-scope-format",
+			))
+		}
+	}
+
+	// Validate BlindingClearanceLevel
+	if profile.BlindingClearanceLevel != "" {
+		switch profile.BlindingClearanceLevel {
+		case "unblinded", "blinded_study", "public", "restricted":
+			// valid enum values
+		default:
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("blindingClearanceLevel").String(),
+				fmt.Errorf("%w: got '%s'", ErrInvalidBlindingLevel, profile.BlindingClearanceLevel),
+				"invalid-blinding-clearance-level",
+			))
+		}
+	}
+
+	// Validate RequiredDataPackDigests
+	for i, digest := range profile.RequiredDataPackDigests {
+		trimmed := strings.ToLower(strings.TrimSpace(digest))
+		if !dataPackHex64Regex.MatchString(trimmed) {
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("requiredDataPackDigests").Index(i).String(),
+				fmt.Errorf("%w: '%s'", ErrInvalidDataPackDigest, trimmed),
+				"invalid-datapack-digest",
+			))
+		} else if err := registries.ValidateDigestFormatAndNonDummy(trimmed); err != nil {
+			result.AddIssue(NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.Field("requiredDataPackDigests").Index(i).String(),
+				err,
+				"dummy-datapack-digest",
+			))
+		}
+	}
+
+	return result
 }

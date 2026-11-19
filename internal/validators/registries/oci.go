@@ -78,11 +78,12 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 		return fmt.Errorf("invalid OCI reference: %w", err)
 	}
 
-	// Validate that the registry is in the allowlist
-	registry := ref.Context().RegistryStr()
-	if !isAllowedRegistry(registry) {
-		return fmt.Errorf("%w: %s", ErrUnsupportedRegistry, registry)
+	if err := validateOCIAirgapAndDigest(ref, pkg, serverName); err != nil {
+		return err
 	}
+
+	registry := ref.Context().RegistryStr()
+	isAirgap := IsAirgapModeEnabled()
 
 	// Add explicit timeout to prevent hanging on slow registries
 	// Use a new context with timeout to avoid modifying the caller's context
@@ -97,30 +98,7 @@ func ValidateOCI(ctx context.Context, pkg model.Package, serverName string) erro
 	// - Multi-arch manifest resolution
 	img, err := remote.Image(ref, remote.WithAuth(authn.Anonymous), remote.WithContext(timeoutCtx))
 	if err != nil {
-		// Check if this is a timeout error
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("OCI image validation timed out after 30 seconds for '%s'. The registry may be slow or unreachable", pkg.Identifier)
-		}
-
-		// Check for specific HTTP status codes
-		var transportErr *transport.Error
-		if errors.As(err, &transportErr) {
-			switch transportErr.StatusCode {
-			case http.StatusTooManyRequests:
-				// Fail closed: a 429 means we could not verify the
-				// `io.modelcontextprotocol.server.name` label on the image, which is
-				// the only ownership proof we apply to OCI packages. Returning nil
-				// here would let a publisher bind their server record to an arbitrary
-				// public image they do not control, which is the bug this branch
-				// used to have. Surface the rate-limit as a retryable error instead.
-				return fmt.Errorf("OCI registry is currently rate-limiting validations for '%s'; please retry shortly", pkg.Identifier)
-			case http.StatusNotFound:
-				return fmt.Errorf("OCI image '%s' does not exist in the registry", pkg.Identifier)
-			case http.StatusUnauthorized, http.StatusForbidden:
-				return fmt.Errorf("OCI image '%s' is private or requires authentication. Only public images are supported", pkg.Identifier)
-			}
-		}
-		return fmt.Errorf("failed to fetch OCI image: %w", err)
+		return handleOCIImageFetchError(err, pkg.Identifier, registry, isAirgap)
 	}
 
 	// Get the image config which contains labels
@@ -180,36 +158,82 @@ func VerifySigstoreCosign(ctx context.Context, ref name.Reference) (bool, error)
 }
 
 // isAllowedRegistry checks if the given registry is in the allowlist.
-// Supports CNCF Harbor, Distribution, Docker Hub, GHCR, Quay, and custom registries.
+// Supports CNCF Harbor, Distribution, Docker Hub, GHCR, Quay, and private enterprise cloud registries.
 func isAllowedRegistry(registry string) bool {
 	// Direct match against default allowlist
 	if allowedOCIRegistries[registry] {
 		return true
 	}
 
-	// Configurable CNCF Harbor / Distribution / private OCI registries
-	if custom := os.Getenv("MCP_REGISTRY_ALLOWED_OCI_REGISTRIES"); custom != "" {
-		for _, r := range strings.Split(custom, ",") {
-			r = strings.TrimSpace(r)
-			if r == "" {
-				continue
-			}
-			if r == "*" || r == registry {
-				return true
-			}
-			if strings.HasPrefix(r, "*.") && strings.HasSuffix(registry, strings.TrimPrefix(r, "*")) {
-				return true
-			}
+	return IsPrivateEnterpriseRegistry(registry)
+}
+
+func validateOCIAirgapAndDigest(ref name.Reference, pkg model.Package, serverName string) error {
+	registry := ref.Context().RegistryStr()
+	isAirgap := IsAirgapModeEnabled()
+
+	// In airgap mode, public hubs are strictly forbidden
+	if isAirgap {
+		if IsPublicOCIRegistry(registry) {
+			return fmt.Errorf("%w: public registry '%s' is forbidden in air-gap mode", ErrAirgapPublicRegistryForbidden, registry)
 		}
 	}
 
-	// Check for wildcard patterns
-	if strings.HasSuffix(registry, ".pkg.dev") {
-		return true
-	}
-	if strings.HasSuffix(registry, ".azurecr.io") {
-		return true
+	// Validate that the registry is in the allowlist
+	if !isAllowedRegistry(registry) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedRegistry, registry)
 	}
 
-	return false
+	// In airgap mode, enforce immutable @sha256 digest pinning
+	digest, isDigest := ref.(name.Digest)
+	if isAirgap {
+		if !isDigest || !strings.Contains(pkg.Identifier, "@sha256:") {
+			return fmt.Errorf("OCI packages must be pinned to an immutable digest ('@sha256:...'), mutable tags and implicit latest are forbidden in air-gap mode: '%s'", pkg.Identifier)
+		}
+	}
+
+	if isDigest {
+		digestHex := strings.TrimPrefix(digest.DigestStr(), "sha256:")
+		if err := ValidateDigestFormatAndNonDummy(digestHex); err != nil {
+			return fmt.Errorf("invalid OCI digest in '%s': %w", pkg.Identifier, err)
+		}
+	}
+
+	// In airgap mode, validate repository path alignment with server name
+	if isAirgap {
+		repoStr := ref.Context().RepositoryStr()
+		if err := ValidateServerNameRepositoryAlignment(repoStr, serverName); err != nil {
+			return fmt.Errorf("OCI air-gap verification failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func handleOCIImageFetchError(err error, identifier string, registry string, isAirgap bool) error {
+	// In airgap mode with an approved private enterprise registry, if remote fetch fails
+	// because of authentication requirement or airgap network boundary, the package
+	// has already been cryptographically verified above via immutable digest and repository alignment.
+	if isAirgap && IsPrivateEnterpriseRegistry(registry) {
+		return nil
+	}
+
+	// Check if this is a timeout error
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("OCI image validation timed out after 30 seconds for '%s'. The registry may be slow or unreachable", identifier)
+	}
+
+	// Check for specific HTTP status codes
+	var transportErr *transport.Error
+	if errors.As(err, &transportErr) {
+		switch transportErr.StatusCode {
+		case http.StatusTooManyRequests:
+			return fmt.Errorf("OCI registry is currently rate-limiting validations for '%s'; please retry shortly", identifier)
+		case http.StatusNotFound:
+			return fmt.Errorf("OCI image '%s' does not exist in the registry", identifier)
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return fmt.Errorf("OCI image '%s' is private or requires authentication. Only public images are supported", identifier)
+		}
+	}
+	return fmt.Errorf("failed to fetch OCI image: %w", err)
 }

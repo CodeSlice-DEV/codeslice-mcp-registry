@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,14 @@ func ValidateNuGet(ctx context.Context, pkg model.Package, serverName string) er
 	err := validateAndNormalizeBaseURL(&pkg)
 	if err != nil {
 		return err
+	}
+
+	// In airgap mode, public NuGet registry is forbidden
+	if IsAirgapModeEnabled() {
+		allowedMirror := os.Getenv("MCP_REGISTRY_ALLOWED_NUGET_MIRROR")
+		if allowedMirror == "" || !strings.HasPrefix(pkg.RegistryBaseURL, allowedMirror) {
+			return fmt.Errorf("%w: public NuGet registry '%s' is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.RegistryBaseURL)
+		}
 	}
 
 	if pkg.Version == "" {

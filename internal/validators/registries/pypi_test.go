@@ -255,3 +255,18 @@ func TestValidatePyPI_RealPackages(t *testing.T) {
 		})
 	}
 }
+
+func TestValidatePyPI_AirgapMode(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MCP_REGISTRY_AIRGAP_MODE", "true")
+
+	pkg := model.Package{
+		RegistryType: model.RegistryTypePyPI,
+		Identifier:   "example-pkg",
+		Version:      "1.0.0",
+	}
+
+	err := registries.ValidatePyPI(ctx, pkg, "com.example/example-pkg")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "public registry is forbidden in air-gap mode")
+}
