@@ -102,6 +102,12 @@ type JWTManager struct {
 	maxCacheSize   int
 }
 
+var (
+	ephemeralKeyOnce sync.Once
+	ephemeralPubKey  ed25519.PublicKey
+	ephemeralPrivKey ed25519.PrivateKey
+)
+
 func NewJWTManager(cfg *config.Config) *JWTManager {
 	var privateKey ed25519.PrivateKey
 	var publicKey ed25519.PublicKey
@@ -117,12 +123,16 @@ func NewJWTManager(cfg *config.Config) *JWTManager {
 		privateKey = ed25519.NewKeyFromSeed(seed)
 		publicKey = privateKey.Public().(ed25519.PublicKey)
 	} else {
-		// Secure ephemeral key pair generation when no raw private key is provided in process memory
-		var err error
-		publicKey, privateKey, err = ed25519.GenerateKey(nil)
-		if err != nil {
-			panic(fmt.Sprintf("failed to generate ephemeral Ed25519 key pair: %v", err))
-		}
+		// Secure process-wide ephemeral key pair generation when no raw private key is provided in process memory
+		ephemeralKeyOnce.Do(func() {
+			var err error
+			ephemeralPubKey, ephemeralPrivKey, err = ed25519.GenerateKey(nil)
+			if err != nil {
+				panic(fmt.Sprintf("failed to generate ephemeral Ed25519 key pair: %v", err))
+			}
+		})
+		publicKey = ephemeralPubKey
+		privateKey = ephemeralPrivKey
 	}
 
 	allowedTenants := []string{}
