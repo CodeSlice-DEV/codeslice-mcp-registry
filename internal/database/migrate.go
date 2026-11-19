@@ -148,7 +148,7 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Applying %d pending migrations", len(pending))
+	log.Printf("Applying %d pending migrations", len(pending)) //nolint:gosec // G706: integer count of migrations is safe
 
 	// Apply each pending migration in a transaction
 	for _, migration := range pending {
