@@ -5,14 +5,9 @@ on:
     branches:
       - develop
       - main
-    paths-ignore:
-      - 'deploy/Pulumi.gcpProd.yaml'
 
 permissions:
   contents: read
-
-env:
-  PULUMI_VERSION: "3.188.0"
 
 jobs:
   ko-push:
@@ -32,7 +27,7 @@ jobs:
           cache: true
 
       - name: Set up ko
-        uses: ko-build/setup-ko@v0.10
+        uses: ko-build/setup-ko@ace48d793556083a76f1e3e6068850c1f4a369aa # v0.10
 
       - name: Log in to Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
@@ -61,44 +56,14 @@ jobs:
             --platform=linux/amd64,linux/arm64 \
             --tags=develop-${{ steps.build-info.outputs.date }}-${{ steps.build-info.outputs.short_sha }},develop
 
-  deploy-staging:
-    name: Deploy to Staging
+  validate-deployment:
+    name: Validate Helm and OpenTofu Stacks
     runs-on: ubuntu-latest
-    environment: staging
     needs: ko-push
-    concurrency:
-      group: deploy-staging
-      cancel-in-progress: false
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: 'stable'
-          cache: true
-
-      - name: Setup Pulumi
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d
-        with:
-          pulumi-version: ${{ env.PULUMI_VERSION }}
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
-        with:
-          credentials_json: ${{ secrets.GCP_STAGING_SERVICE_ACCOUNT_KEY }}
-
-      - name: Setup Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
-        with:
-          project_id: mcp-registry-staging
-          install_components: gke-gcloud-auth-plugin
-
-      - name: Deploy to Staging
-        working-directory: ./deploy
-        env:
-          PULUMI_STAGING_PASSPHRASE: ${{ secrets.PULUMI_STAGING_PASSPHRASE }}
+      - name: Lint Helm Chart
         run: |
-          echo "$PULUMI_STAGING_PASSPHRASE" > passphrase.staging.txt
-          make staging-up
+          helm lint deploy/helm/mcp-registry
