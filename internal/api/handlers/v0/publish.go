@@ -58,6 +58,13 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 			return nil, huma.Error403Forbidden(buildPermissionErrorMessage(input.Body.Name, claims.Permissions))
 		}
 
+		// Enterprise security profiles require valid tenant identity in staging / production (#2112)
+		if input.Body.SecurityProfile != nil {
+			if (cfg.EnvironmentTier == "production" || cfg.EnvironmentTier == "staging") && (claims == nil || claims.TenantID == "") {
+				return nil, huma.Error403Forbidden("Publishing servers with a SecurityProfile requires tenant-scoped authentication")
+			}
+		}
+
 		// Validate server JSON structure and schema (returns 422 on validation failure)
 		validationResult := validators.ValidateServerJSON(&input.Body, validators.ValidationSchemaVersionAndSemantic)
 		if !validationResult.Valid {

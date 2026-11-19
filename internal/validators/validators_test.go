@@ -2307,3 +2307,88 @@ func TestValidateTitle(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+func TestValidateServerJSON_SecurityProfile(t *testing.T) {
+	baseServer := func() apiv0.ServerJSON {
+		return apiv0.ServerJSON{
+			Schema:      "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+			Name:        "dev.codeslice/veeva-vault-safety-mcp",
+			Description: "Enterprise pharmacovigilance safety connector",
+			Version:     "1.0.0",
+		}
+	}
+
+	t.Run("valid security profile passes", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			EntraOboResource:        "api://codeslice-pv-veeva-vault",
+			RequiredDelegatedScopes: []string{"VeevaVault.Case.Read", "VeevaVault.Case.Write"},
+			RequiresHicBeforeWrite:  true,
+			BlindingClearanceLevel:  "blinded_study",
+			RequiredDataPackDigests: []string{"fde266074309966c5ac9c241f1704050d7cb2bcab885678dab75a067a9066919"},
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.True(t, result.Valid)
+		assert.NoError(t, result.FirstError())
+	})
+
+	t.Run("invalid entra obo resource scheme rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			EntraOboResource: "ftp://invalid-resource",
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "entraOboResource must be a valid URI")
+	})
+
+	t.Run("empty delegated scope rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			RequiredDelegatedScopes: []string{"Valid.Scope", "   "},
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "cannot contain empty scope strings")
+	})
+
+	t.Run("invalid scope characters rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			RequiredDelegatedScopes: []string{"Scope with spaces!"},
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "invalid scope format")
+	})
+
+	t.Run("invalid blinding clearance level rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			BlindingClearanceLevel: "super_secret_level",
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "blindingClearanceLevel must be one of")
+	})
+
+	t.Run("dummy data pack digest rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			RequiredDataPackDigests: []string{"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "placeholder or dummy hash detected")
+	})
+
+	t.Run("invalid hex length data pack digest rejected", func(t *testing.T) {
+		s := baseServer()
+		s.SecurityProfile = &model.SecurityProfile{
+			RequiredDataPackDigests: []string{"abc123short"},
+		}
+		result := validators.ValidateServerJSON(&s, validators.ValidationSchemaVersionAndSemantic)
+		assert.False(t, result.Valid)
+		assert.Contains(t, result.FirstError().Error(), "requiredDataPackDigests must contain valid 64-character")
+	})
+}

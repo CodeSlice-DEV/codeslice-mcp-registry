@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/pkg/model"
@@ -66,6 +68,14 @@ func ValidateCargo(ctx context.Context, pkg model.Package, serverName string) er
 
 	if pkg.Identifier == "" {
 		return ErrMissingIdentifierForCargo
+	}
+
+	// In airgap mode, public Cargo/crates.io registry is forbidden
+	if IsAirgapModeEnabled() {
+		allowedMirror := os.Getenv("MCP_REGISTRY_ALLOWED_CARGO_MIRROR")
+		if allowedMirror == "" || !strings.HasPrefix(pkg.RegistryBaseURL, allowedMirror) {
+			return fmt.Errorf("%w: public Cargo/crates.io registry '%s' is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.RegistryBaseURL)
+		}
 	}
 
 	if pkg.Version == "" {

@@ -50,11 +50,11 @@ jobs:
           GIT_COMMIT: ${{ github.sha }}
           BUILD_TIME: ${{ steps.build-info.outputs.timestamp }}
         run: |
-          # Build and push multi-platform image
+          # Build and push multi-platform image with immutable version-pinned tags (zero mutable :develop tag)
           ko build ./cmd/registry \
             --bare \
             --platform=linux/amd64,linux/arm64 \
-            --tags=develop-${{ steps.build-info.outputs.date }}-${{ steps.build-info.outputs.short_sha }},develop
+            --tags=develop-${{ steps.build-info.outputs.date }}-${{ steps.build-info.outputs.short_sha }}
 
   validate-deployment:
     name: Validate Helm and OpenTofu Stacks

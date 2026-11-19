@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/pkg/model"
@@ -31,6 +33,14 @@ func ValidateNPM(ctx context.Context, pkg model.Package, serverName string) erro
 
 	if pkg.Identifier == "" {
 		return ErrMissingIdentifierForNPM
+	}
+
+	// In airgap mode, public registry.npmjs.org is forbidden
+	if IsAirgapModeEnabled() {
+		allowedMirror := os.Getenv("MCP_REGISTRY_ALLOWED_NPM_MIRROR")
+		if allowedMirror == "" || !strings.HasPrefix(pkg.RegistryBaseURL, allowedMirror) {
+			return fmt.Errorf("%w: public NPM registry '%s' is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.RegistryBaseURL)
+		}
 	}
 
 	// we need version to look up the package metadata

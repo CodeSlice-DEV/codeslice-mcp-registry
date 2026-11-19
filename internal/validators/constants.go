@@ -30,6 +30,13 @@ var (
 	// Server name validation errors
 	ErrMultipleSlashesInServerName = errors.New("server name cannot contain multiple slashes")
 	ErrInvalidServerNameFormat     = errors.New("server name format is invalid")
+
+	// Security profile validation errors
+	ErrInvalidEntraResource  = errors.New("entraOboResource must be a valid URI starting with api:// or https://")
+	ErrEmptyDelegatedScope   = errors.New("requiredDelegatedScopes cannot contain empty scope strings")
+	ErrInvalidScopeFormat    = errors.New("invalid scope format: must contain alphanumeric characters, dots, colons, or underscores")
+	ErrInvalidBlindingLevel  = errors.New("blindingClearanceLevel must be one of: unblinded, blinded_study, public, restricted")
+	ErrInvalidDataPackDigest = errors.New("requiredDataPackDigests must contain valid 64-character lowercase hex SHA-256 digests")
 )
 
 // RepositorySource represents valid repository sources
