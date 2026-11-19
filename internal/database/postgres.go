@@ -137,6 +137,11 @@ func buildFilterConditions(filter *ServerFilter, argIndex int) ([]string, []any,
 		args = append(args, *filter.IsLatest)
 		argIndex++
 	}
+	if filter.TenantID != nil && *filter.TenantID != "" {
+		conditions = append(conditions, fmt.Sprintf("(tenant_id = $%d OR tenant_id IS NULL OR tenant_id = '')", argIndex))
+		args = append(args, *filter.TenantID)
+		argIndex++
+	}
 	if filter.IncludeDeleted == nil || !*filter.IncludeDeleted {
 		conditions = append(conditions, "status != 'deleted'")
 	}

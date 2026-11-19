@@ -30,7 +30,7 @@ func NewNoneHandler(cfg *config.Config) *NoneHandler {
 // WARNING: This endpoint is intended for local development and automated tests only.
 // It should NOT be enabled in production environments as it bypasses normal authentication.
 func RegisterNoneEndpoint(api huma.API, pathPrefix string, cfg *config.Config) {
-	if !cfg.EnableAnonymousAuth {
+	if !cfg.EnableAnonymousAuth || cfg.EnvironmentTier == "production" || cfg.EnvironmentTier == "staging" {
 		return
 	}
 
@@ -58,6 +58,10 @@ func RegisterNoneEndpoint(api huma.API, pathPrefix string, cfg *config.Config) {
 
 // GetAnonymousToken generates an anonymous Registry JWT token
 func (h *NoneHandler) GetAnonymousToken(ctx context.Context) (*auth.TokenResponse, error) {
+	if !h.config.EnableAnonymousAuth || h.config.EnvironmentTier == "production" || h.config.EnvironmentTier == "staging" {
+		return nil, fmt.Errorf("anonymous authentication is disabled in %s environment", h.config.EnvironmentTier)
+	}
+
 	// Build permissions for anonymous namespace only
 	permissions := []auth.Permission{
 		{

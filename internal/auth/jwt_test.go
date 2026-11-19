@@ -413,4 +413,69 @@ func TestJWTManager_BlockedNamespaces(t *testing.T) {
 		mgr := auth.NewJWTManager(enterpriseCfg)
 		require.NotNil(t, mgr)
 	})
+
+	t.Run("fail-closed SSRF protection: unconfigured issuers reject all external tokens", func(t *testing.T) {
+		emptyCfg := &config.Config{
+			JWTPrivateKey:      hex.EncodeToString(testSeed),
+			OIDCEnabled:        true,
+			OIDCIssuer:         "",
+			OIDCAllowedIssuers: "",
+		}
+		mgr := auth.NewJWTManager(emptyCfg)
+		require.NotNil(t, mgr)
+
+		// Any external issuer must be rejected immediately without network egress
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://attacker-rogue-idp.com"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://evil.org"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://169.254.169.254/latest/meta-data"))
+		assert.False(t, mgr.IsIssuerAllowedForTest(""))
+	})
+
+	t.Run("domain suffix spoofing is strictly rejected", func(t *testing.T) {
+		strictCfg := &config.Config{
+			JWTPrivateKey:      hex.EncodeToString(testSeed),
+			OIDCEnabled:        true,
+			OIDCIssuer:         "https://auth.enterprise.com",
+			OIDCAllowedIssuers: "https://auth.enterprise.com,https://login.microsoftonline.com/*",
+		}
+		mgr := auth.NewJWTManager(strictCfg)
+		require.NotNil(t, mgr)
+
+		// Legitimate allowed issuers
+		assert.True(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com"))
+		assert.True(t, mgr.IsIssuerAllowedForTest("https://login.microsoftonline.com/tenant-123/v2.0"))
+
+		// Malicious spoofed domain suffixes must be rejected
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com.evil.tld"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://auth.enterprise.com.attacker.com/v2.0"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("https://login.microsoftonline.com.evil.tld/common/v2.0"))
+		assert.False(t, mgr.IsIssuerAllowedForTest("http://auth.enterprise.com")) // insecure HTTP
+	})
+
+	t.Run("tenant ID allowlist enforcement and wildcard rejection in production", func(t *testing.T) {
+		prodCfg := &config.Config{
+			JWTPrivateKey:                   hex.EncodeToString(testSeed),
+			OIDCEnabled:                     true,
+			EnvironmentTier:                 "production",
+			OIDCMicrosoftMultiTenantEnabled: true,
+			OIDCAllowedTenants:              "allowed-tenant-uuid-1,allowed-tenant-uuid-2",
+		}
+		mgr := auth.NewJWTManager(prodCfg)
+		require.NotNil(t, mgr)
+
+		assert.True(t, mgr.IsTenantAllowedForTest("allowed-tenant-uuid-1"))
+		assert.True(t, mgr.IsTenantAllowedForTest("allowed-tenant-uuid-2"))
+		assert.False(t, mgr.IsTenantAllowedForTest("unauthorized-foreign-tenant"))
+		assert.False(t, mgr.IsTenantAllowedForTest(""))
+
+		// In production, wildcard '*' must be strictly rejected
+		prodWildcardCfg := &config.Config{
+			JWTPrivateKey:      hex.EncodeToString(testSeed),
+			OIDCEnabled:        true,
+			EnvironmentTier:    "production",
+			OIDCAllowedTenants: "*",
+		}
+		prodWildcardMgr := auth.NewJWTManager(prodWildcardCfg)
+		assert.False(t, prodWildcardMgr.IsTenantAllowedForTest("any-random-tenant"))
+	})
 }

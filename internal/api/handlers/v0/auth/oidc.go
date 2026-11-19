@@ -44,6 +44,11 @@ type StandardOIDCValidator struct {
 func NewStandardOIDCValidator(issuer, clientID string) (*StandardOIDCValidator, error) {
 	ctx := context.Background()
 
+	// Handle Microsoft dynamic tenant discovery templates without panicking on issuer mismatch
+	if strings.Contains(issuer, "login.microsoftonline.com") || strings.Contains(issuer, "common") {
+		ctx = oidc.InsecureIssuerURLContext(ctx, issuer)
+	}
+
 	// Initialize the OIDC provider
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
@@ -53,6 +58,9 @@ func NewStandardOIDCValidator(issuer, clientID string) (*StandardOIDCValidator, 
 	// Create ID token verifier
 	verifierConfig := &oidc.Config{
 		ClientID: clientID,
+	}
+	if strings.Contains(issuer, "common") {
+		verifierConfig.SkipIssuerCheck = true
 	}
 	verifier := provider.Verifier(verifierConfig)
 

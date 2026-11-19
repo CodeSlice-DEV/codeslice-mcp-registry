@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/modelcontextprotocol/registry/internal/auth"
+	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/database"
 	"github.com/modelcontextprotocol/registry/internal/service"
 	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
@@ -55,6 +57,7 @@ func resolveIncludeDeleted(includeDeleted OptionalBool, hasUpdatedSince bool) (b
 
 // ListServersInput represents the input for listing servers
 type ListServersInput struct {
+	Authorization  string       `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	Cursor         string       `query:"cursor" doc:"Pagination cursor" required:"false" example:"server-cursor-123"`
 	Limit          int          `query:"limit" doc:"Number of items per page" default:"30" minimum:"1" maximum:"100" example:"50"`
 	UpdatedSince   string       `query:"updated_since" doc:"Filter servers updated since timestamp (RFC3339 datetime)" required:"false" example:"2025-08-07T13:15:04.280Z"`
@@ -65,11 +68,13 @@ type ListServersInput struct {
 
 // ServerDetailInput represents the input for getting server details
 type ServerDetailInput struct {
-	ServerName string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
+	Authorization string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
+	ServerName    string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 }
 
 // ServerVersionDetailInput represents the input for getting a specific version
 type ServerVersionDetailInput struct {
+	Authorization  string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	ServerName     string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 	Version        string `path:"version" doc:"URL-encoded server version" example:"1.0.0"`
 	IncludeDeleted bool   `query:"include_deleted" doc:"Include deleted servers in results (default: false)" required:"false" default:"false"`
@@ -77,12 +82,47 @@ type ServerVersionDetailInput struct {
 
 // ServerVersionsInput represents the input for listing all versions of a server
 type ServerVersionsInput struct {
+	Authorization  string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	ServerName     string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 	IncludeDeleted bool   `query:"include_deleted" doc:"Include deleted servers in results (default: false)" required:"false" default:"false"`
 }
 
 // RegisterServersEndpoints registers all server-related endpoints with a custom path prefix
-func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.RegistryService) {
+func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.RegistryService, cfg ...*config.Config) {
+	var activeCfg *config.Config
+	if len(cfg) > 0 && cfg[0] != nil {
+		activeCfg = cfg[0]
+	}
+
+	authenticate := func(ctx context.Context, authHeader string) (*auth.JWTClaims, error) {
+		if activeCfg == nil {
+			return nil, nil
+		}
+		if authHeader == "" {
+			if activeCfg.RequireAuthForDiscovery {
+				return nil, huma.Error401Unauthorized("Authentication required for discovery")
+			}
+			return nil, nil
+		}
+		const bearerPrefix = "Bearer "
+		if len(authHeader) < len(bearerPrefix) || !strings.EqualFold(authHeader[:len(bearerPrefix)], bearerPrefix) {
+			if activeCfg.RequireAuthForDiscovery {
+				return nil, huma.Error401Unauthorized("Invalid Authorization header format. Expected 'Bearer <token>'")
+			}
+			return nil, nil
+		}
+		token := strings.TrimSpace(authHeader[len(bearerPrefix):])
+		jwtMgr := auth.NewJWTManager(activeCfg)
+		claims, err := jwtMgr.ValidateToken(ctx, token)
+		if err != nil {
+			if activeCfg.RequireAuthForDiscovery {
+				return nil, huma.Error401Unauthorized("Invalid bearer token", err)
+			}
+			return nil, nil
+		}
+		return claims, nil
+	}
+
 	// List servers endpoint
 	huma.Register(api, huma.Operation{
 		OperationID: "list-servers" + strings.ReplaceAll(pathPrefix, "/", "-"),
@@ -92,8 +132,16 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get a paginated list of MCP servers from the registry",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ListServersInput) (*Response[apiv0.ServerListResponse], error) {
+		claims, authErr := authenticate(ctx, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
+
 		// Build filter from input parameters
 		filter := &database.ServerFilter{}
+		if claims != nil && claims.TenantID != "" {
+			filter.TenantID = &claims.TenantID
+		}
 
 		// Parse updated_since parameter
 		if input.UpdatedSince != "" {
@@ -161,6 +209,10 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get detailed information about a specific version of an MCP server. Use the special version 'latest' to get the latest version.",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ServerVersionDetailInput) (*Response[apiv0.ServerResponse], error) {
+		if _, authErr := authenticate(ctx, input.Authorization); authErr != nil {
+			return nil, authErr
+		}
+
 		// URL-decode the server name
 		serverName, err := url.PathUnescape(input.ServerName)
 		if err != nil {
@@ -203,6 +255,10 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get all available versions for a specific MCP server",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ServerVersionsInput) (*Response[apiv0.ServerListResponse], error) {
+		if _, authErr := authenticate(ctx, input.Authorization); authErr != nil {
+			return nil, authErr
+		}
+
 		// URL-decode the server name
 		serverName, err := url.PathUnescape(input.ServerName)
 		if err != nil {

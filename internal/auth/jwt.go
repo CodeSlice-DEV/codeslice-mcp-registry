@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +42,7 @@ type JWTClaims struct {
 	// Authentication method used to obtain this token
 	AuthMethod        Method       `json:"auth_method"`
 	AuthMethodSubject string       `json:"auth_method_sub"`
+	TenantID          string       `json:"tenant_id,omitempty"`
 	Permissions       []Permission `json:"permissions"`
 }
 
@@ -68,6 +73,9 @@ type JWTManager struct {
 	oidcAllowedIssuers       []string
 	oidcGroupsClaim          string
 	oidcRoleMapping          map[string][]Permission
+	oidcJwksFile             string
+	oidcJwksJSON             string
+	environmentTier          string
 
 	// Bounded, thread-safe LRU/TTL verifier cache
 	cacheMu        sync.RWMutex
@@ -135,10 +143,49 @@ func NewJWTManager(cfg *config.Config) *JWTManager {
 		oidcAllowedIssuers:       allowedIssuers,
 		oidcGroupsClaim:          groupsClaim,
 		oidcRoleMapping:          roleMapping,
+		oidcJwksFile:             cfg.OIDCJWKSFile,
+		oidcJwksJSON:             cfg.OIDCJWKSJSON,
+		environmentTier:          cfg.EnvironmentTier,
 		verifiersCache:           make(map[string]*cachedVerifier),
 		cacheTTL:                 1 * time.Hour,
 		maxCacheSize:             100,
 	}
+}
+
+type staticJWKSTransport struct {
+	issuer   string
+	jwksJSON []byte
+}
+
+func (t *staticJWKSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	header := make(http.Header)
+	header.Set("Content-Type", "application/json")
+
+	if strings.HasSuffix(req.URL.Path, "/.well-known/openid-configuration") {
+		body := fmt.Sprintf(`{"issuer": %q, "jwks_uri": %q, "response_types_supported": ["id_token"], "subject_types_supported": ["public"], "id_token_signing_alg_values_supported": ["RS256", "ES256", "EdDSA"]}`, t.issuer, t.issuer+"/discovery/keys")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	}
+
+	if strings.HasSuffix(req.URL.Path, "/discovery/keys") || strings.HasSuffix(req.URL.Path, "/keys") || strings.HasSuffix(req.URL.Path, "/jwks.json") {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     header,
+			Body:       io.NopCloser(bytes.NewReader(t.jwksJSON)),
+			Request:    req,
+		}, nil
+	}
+
+	return &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"not_found"}`)),
+		Request:    req,
+	}, nil
 }
 
 // getOIDCVerifier returns a thread-safe, cached IDTokenVerifier for a given issuer
@@ -181,6 +228,28 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 	// Bounded initialization timeout to prevent hanging the HTTP server
 	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Check if offline JWKS is configured for zero-egress/air-gapped operation
+	var jwksBytes []byte
+	if j.oidcJwksFile != "" {
+		b, err := os.ReadFile(j.oidcJwksFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read offline JWKS file %q: %w", j.oidcJwksFile, err)
+		}
+		jwksBytes = b
+	} else if j.oidcJwksJSON != "" {
+		jwksBytes = []byte(j.oidcJwksJSON)
+	}
+
+	if len(jwksBytes) > 0 {
+		customClient := &http.Client{
+			Transport: &staticJWKSTransport{
+				issuer:   issuer,
+				jwksJSON: jwksBytes,
+			},
+		}
+		initCtx = oidc.ClientContext(initCtx, customClient)
+	}
 
 	var verifier *oidc.IDTokenVerifier
 
@@ -229,20 +298,68 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 }
 
 func (j *JWTManager) isIssuerAllowed(issuer string) bool {
-	if len(j.oidcAllowedIssuers) == 0 {
-		// If no whitelist configured and oidcIssuer matches, allow
-		if j.oidcIssuer != "" && strings.HasPrefix(issuer, j.oidcIssuer) {
-			return true
-		}
-		// If Microsoft multi-tenant enabled, allow Microsoft domains by default
-		if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) {
-			return true
-		}
-		return j.oidcIssuer == "" || issuer == j.oidcIssuer
+	if issuer == "" {
+		return false
 	}
 
+	parsedIssuer, err := url.Parse(issuer)
+	if err != nil || parsedIssuer.Scheme != "https" || parsedIssuer.Host == "" {
+		return false
+	}
+
+	// Fail-closed: If no allowed issuers configured and no primary oidcIssuer configured, reject everything
+	if len(j.oidcAllowedIssuers) == 0 && j.oidcIssuer == "" && !j.oidcMsMultiTenantEnabled {
+		return false
+	}
+
+	// Check primary oidcIssuer with exact host and path matching
+	if j.oidcIssuer != "" {
+		parsedPrimary, err := url.Parse(j.oidcIssuer)
+		if err == nil && strings.EqualFold(parsedIssuer.Host, parsedPrimary.Host) &&
+			strings.TrimRight(parsedIssuer.Path, "/") == strings.TrimRight(parsedPrimary.Path, "/") {
+			return true
+		}
+	}
+
+	// If Microsoft multi-tenant enabled, allow Microsoft domains if hostname strictly matches
+	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) {
+		return true
+	}
+
+	// Check whitelist of allowed issuers
 	for _, allowed := range j.oidcAllowedIssuers {
-		if allowed == "*" || issuer == allowed || strings.HasPrefix(issuer, allowed) {
+		if allowed == "" {
+			continue
+		}
+		if allowed == "*" {
+			// In production/staging, wildcard '*' is strictly forbidden
+			if j.environmentTier == "production" || j.environmentTier == "staging" {
+				continue
+			}
+			return true
+		}
+
+		// Handle wildcard path like https://login.microsoftonline.com/*
+		if strings.HasSuffix(allowed, "/*") {
+			base := strings.TrimSuffix(allowed, "/*")
+			parsedBase, err := url.Parse(base)
+			if err == nil && strings.EqualFold(parsedIssuer.Host, parsedBase.Host) {
+				basePath := strings.TrimRight(parsedBase.Path, "/")
+				if basePath == "" || strings.HasPrefix(parsedIssuer.Path, basePath+"/") || parsedIssuer.Path == basePath {
+					return true
+				}
+			}
+			continue
+		}
+
+		parsedAllowed, err := url.Parse(allowed)
+		if err == nil {
+			// Strict host and path matching (prevents domain-suffix spoofing like enterprise.com.evil.tld)
+			if strings.EqualFold(parsedIssuer.Host, parsedAllowed.Host) &&
+				strings.TrimRight(parsedIssuer.Path, "/") == strings.TrimRight(parsedAllowed.Path, "/") {
+				return true
+			}
+		} else if strings.EqualFold(issuer, allowed) {
 			return true
 		}
 	}
@@ -250,8 +367,12 @@ func (j *JWTManager) isIssuerAllowed(issuer string) bool {
 }
 
 func isMicrosoftIssuer(issuer string) bool {
-	return strings.HasPrefix(issuer, "https://login.microsoftonline.com/") ||
-		strings.HasPrefix(issuer, "https://sts.windows.net/")
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Host)
+	return host == "login.microsoftonline.com" || host == "sts.windows.net"
 }
 
 // GenerateTokenResponse generates a new Registry JWT token
@@ -375,9 +496,18 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 	// Dynamic RBAC Permission Mapping
 	permissions := j.extractPermissionsFromClaims(oidcClaims)
 
+	// Extract tenant ID if present in claims
+	var tenantID string
+	if tid, ok := oidcClaims["tid"].(string); ok && tid != "" {
+		tenantID = tid
+	} else if tid, ok := oidcClaims["tenant_id"].(string); ok && tid != "" {
+		tenantID = tid
+	}
+
 	slog.Info("OIDC token authenticated successfully",
 		"sub", subIdentity,
 		"issuer", idToken.Issuer,
+		"tenant_id", tenantID,
 		"auth_method", MethodOIDC,
 	)
 
@@ -390,16 +520,27 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		},
 		AuthMethod:        MethodOIDC,
 		AuthMethodSubject: subIdentity,
+		TenantID:          tenantID,
 		Permissions:       permissions,
 	}, nil
 }
 
 func (j *JWTManager) isTenantAllowed(tenantID string) bool {
+	if tenantID == "" {
+		return false
+	}
 	if len(j.oidcAllowedTenants) == 0 {
-		return true
+		return false
 	}
 	for _, allowed := range j.oidcAllowedTenants {
-		if allowed == "*" || allowed == tenantID {
+		if allowed == "*" {
+			if j.environmentTier == "production" || j.environmentTier == "staging" {
+				// Wildcard '*' is strictly forbidden in production and staging
+				continue
+			}
+			return true
+		}
+		if strings.EqualFold(allowed, tenantID) {
 			return true
 		}
 	}

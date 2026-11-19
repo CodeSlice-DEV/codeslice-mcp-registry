@@ -27,10 +27,17 @@ type Config struct {
 	OIDCEditPerms                   string `env:"OIDC_EDIT_PERMISSIONS" envDefault:""`
 	OIDCPublishPerms                string `env:"OIDC_PUBLISH_PERMISSIONS" envDefault:""`
 	OIDCMicrosoftMultiTenantEnabled bool   `env:"OIDC_MS_MULTI_TENANT_ENABLED" envDefault:"false"`
-	OIDCAllowedTenants              string `env:"OIDC_ALLOWED_TENANTS" envDefault:"*"`
+	OIDCAllowedTenants              string `env:"OIDC_ALLOWED_TENANTS" envDefault:""`
 	OIDCAllowedIssuers              string `env:"OIDC_ALLOWED_ISSUERS" envDefault:""`
 	OIDCGroupsClaim                 string `env:"OIDC_GROUPS_CLAIM" envDefault:"groups"`
 	OIDCRoleMappingJSON             string `env:"OIDC_ROLE_MAPPING_JSON" envDefault:""`
+	OIDCJWKSFile                    string `env:"OIDC_JWKS_FILE" envDefault:""`
+	OIDCJWKSJSON                    string `env:"OIDC_JWKS_JSON" envDefault:""`
+
+	// Security & Tenancy Configuration
+	RequireAuthForDiscovery bool   `env:"REQUIRE_AUTH_FOR_DISCOVERY" envDefault:"false"`
+	EnvironmentTier         string `env:"ENVIRONMENT_TIER" envDefault:"development"`
+	AirgapMode              bool   `env:"AIRGAP_MODE" envDefault:"false"`
 }
 
 // NewConfig creates a new configuration with default values
