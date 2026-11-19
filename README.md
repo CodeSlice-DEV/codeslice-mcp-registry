@@ -114,7 +114,7 @@ For Claude and other AI tools: Always prefer make targets over custom commands w
 │   ├── publisher/           # Server publishing tool
 │   └── registry/            # Registry API server
 ├── data/                    # Seed data
-├── deploy/                  # Deployment configuration (Pulumi)
+├── deploy/                  # Deployment configuration (Helm & OpenTofu)
 ├── docs/                    # Documentation
 ├── internal/                # Private application code
 │   ├── api/                 # HTTP handlers and routing

@@ -1,0 +1,113 @@
+# Default values for mcp-registry.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/codeslice-dev/mcp-registry-v2
+  pullPolicy: IfNotPresent
+  # Pinned immutable OCI image digest
+  tag: "develop@sha256:4d603a11b66fe8555e09fc22a9ee2b202867e335559fdb23e4407b46cc69f880"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+# Kubernetes Gateway API (Envoy Gateway)
+gateway:
+  enabled: true
+  name: envoy-gateway
+  namespace: envoy-gateway-system
+  sectionName: https
+  hostname: registry.codeslice.dev
+
+# Database Configuration (CNCF CloudNativePG)
+database:
+  host: mcp-registry-postgresql-rw
+  port: 5432
+  name: mcp-registry
+  user: mcpregistry
+  sslMode: disable
+  # Secret containing the database password managed by CloudNativePG / OpenBao ESO
+  existingSecret: mcp-registry-db-credentials
+  secretPasswordKey: password
+
+# Keycloak OIDC Authentication Configuration
+oidc:
+  enabled: true
+  issuer: "https://auth.codeslice.dev/realms/codeslice"
+  clientID: "codeslice-registry"
+  allowedIssuers: "https://auth.codeslice.dev/realms/codeslice"
+  groupsClaim: "groups"
+  publishPermissions: "*"
+  editPermissions: "*"
+
+# OCI Verification & Allowed Registries (CNCF Harbor / Distribution)
+oci:
+  allowedRegistries: "harbor.codeslice.dev,docker.io,ghcr.io,quay.io"
+  requireSigstore: false
+
+# OpenTelemetry & Prometheus Telemetry
+telemetry:
+  enabled: true
+  metricsPath: "/metrics"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /v0/health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /v0/health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

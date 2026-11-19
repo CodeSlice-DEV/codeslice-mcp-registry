@@ -23,21 +23,20 @@ The release workflow will automatically:
 
 ## Deploying to Production
 
-Releases do not automatically deploy to production. To deploy a release:
+Releases are deployed using OpenTofu and Helm:
 
-1. Update `mcp-registry:imageTag` in `deploy/Pulumi.gcpProd.yaml` to the desired version (e.g., `1.2.3` - note: no 'v' prefix)
-2. Commit and push the change to the `main` branch (either through a PR or by pushing directly to main)
-3. The [deploy-production.yml](../../.github/workflows/deploy-production.yml) workflow will automatically trigger and deploy the specified version
+1. Update `image.tag` in `deploy/helm/mcp-registry/values.yaml` to the desired version (e.g., `1.2.3` - note: no 'v' prefix)
+2. Deploy the updated chart via OpenTofu or Helm upgrade
 
 See the [deployment documentation](../../deploy/README.md) for more details.
 
 ## Staging
 
-Staging auto-deploys from `main` via [deploy-staging.yml](../../.github/workflows/deploy-staging.yml). It always runs the latest `main` branch code.
+Staging images are built and pushed on push to the `develop` branch via [deploy-staging.yml](../../.github/workflows/deploy-staging.yml).
 
 ## Rollback
 
-To rollback production, update `deploy/Pulumi.gcpProd.yaml` to the previous version and push.
+To rollback production, update `deploy/helm/mcp-registry/values.yaml` to the previous version or use `helm rollback`.
 
 **Note:** Rollbacks may not work as expected if the release included database migrations, since migrations are not automatically reversed.
 

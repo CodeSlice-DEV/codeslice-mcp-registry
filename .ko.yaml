@@ -2,8 +2,8 @@
 # Documentation: https://ko.build/configuration/
 
 # Default base image for all builds
-# Using Chainguard's static image for minimal, secure containers (~2MB)
-defaultBaseImage: cgr.dev/chainguard/static:latest
+# Using Chainguard's static image pinned to immutable SHA256 digest
+defaultBaseImage: cgr.dev/chainguard/static:latest@sha256:4d603a11b66fe8555e09fc22a9ee2b202867e335559fdb23e4407b46cc69f880
 
 # Default platforms for multi-architecture builds
 defaultPlatforms:

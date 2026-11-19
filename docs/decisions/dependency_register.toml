@@ -1,0 +1,195 @@
+# Copyright (c) CODESLICE IT SOLUTIONS PRIVATE LIMITED.
+# SPDX-FileCopyrightText: 2026 CODESLICE IT SOLUTIONS PRIVATE LIMITED
+# SPDX-License-Identifier: LicenseRef-Prosperity-3.0.0
+# Rule 22 Dependency & Container Governance Register (Issue #2026, Wave 7).
+
+[metadata]
+schema_version = "1.0"
+issue = 2026
+rule = "Rule 22 — Foundation-Governed Dependencies Only; Own Small Glue In-Repo"
+decision_doc = "docs/decisions/README.md"
+adr_refs = ["docs/decisions/README.md"]
+
+# ==============================================================================
+# 1. Active Direct Go Modules (Bijective with go.mod direct requirements)
+# ==============================================================================
+
+[packages."github.com/caarlos0/env/v11"]
+scope = "core"
+scopes = ["core"]
+license = "MIT"
+governance = "Independent OSS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Environment-variable parser for MCP registry configuration."
+
+[packages."github.com/coreos/go-oidc/v3"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "OpenSSF / CNCF / CoreOS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Standard OIDC token verification provider and verifier."
+
+[packages."github.com/danielgtaylor/huma/v2"]
+scope = "core"
+scopes = ["core"]
+license = "MIT"
+governance = "Independent OSS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "REST API framework with OpenAPI 3.1 generator."
+
+[packages."github.com/golang-jwt/jwt/v5"]
+scope = "core"
+scopes = ["core"]
+license = "MIT"
+governance = "OpenSSF / Community"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Standard cryptographic JWT parser, signer, and claims validator."
+
+[packages."github.com/google/go-containerregistry"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "Google / CNCF / OpenSSF"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "OCI registry reference parsing, manifest discovery, and remote metadata inspection."
+
+[packages."github.com/jackc/pgx/v5"]
+scope = "core"
+scopes = ["core"]
+license = "MIT"
+governance = "PostgreSQL Community"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "PostgreSQL driver and connection pool for CloudNativePG."
+
+[packages."github.com/prometheus/client_golang"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "graduated"
+decision = "keep"
+exception = false
+rationale = "Prometheus client metric collector and HTTP exposition handler."
+
+[packages."github.com/rs/cors"]
+scope = "core"
+scopes = ["core"]
+license = "MIT"
+governance = "Independent OSS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Cross-Origin Resource Sharing (CORS) HTTP middleware."
+
+[packages."github.com/santhosh-tekuri/jsonschema/v5"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "Independent OSS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "JSON Schema validation engine for registry server.json schemas."
+
+[packages."github.com/stretchr/testify"]
+scope = "test"
+scopes = ["test"]
+license = "MIT"
+governance = "Independent OSS"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Test assertion and mock utilities."
+
+[packages."go.opentelemetry.io/contrib/instrumentation/runtime"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "Go runtime memory, goroutine, and GC instrumentation."
+
+[packages."go.opentelemetry.io/otel"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "OpenTelemetry API interface."
+
+[packages."go.opentelemetry.io/otel/exporters/prometheus"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "OpenTelemetry Prometheus metrics bridge."
+
+[packages."go.opentelemetry.io/otel/metric"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "OpenTelemetry Metric API definitions."
+
+[packages."go.opentelemetry.io/otel/sdk"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "OpenTelemetry SDK implementation and resource providers."
+
+[packages."go.opentelemetry.io/otel/sdk/metric"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "CNCF"
+maturity = "incubating"
+decision = "keep"
+exception = false
+rationale = "OpenTelemetry SDK Metric pipeline."
+
+[packages."golang.org/x/mod"]
+scope = "core"
+scopes = ["core"]
+license = "BSD-3-Clause"
+governance = "Go Authors / Google"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Go module and version parsing utilities."
+
+[packages."gopkg.in/yaml.v3"]
+scope = "core"
+scopes = ["core"]
+license = "Apache-2.0"
+governance = "Canonical / Community"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "YAML configuration parser."

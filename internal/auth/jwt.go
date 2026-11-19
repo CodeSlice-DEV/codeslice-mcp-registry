@@ -58,16 +58,14 @@ type JWTManager struct {
 	tokenDuration time.Duration
 
 	// OIDC Configurations
-	oidcEnabled              bool
-	oidcIssuer               string
-	oidcClientID             string
-	oidcPublishPerms         string
-	oidcEditPerms            string
-	oidcMsMultiTenantEnabled bool
-	oidcAllowedTenants       []string
-	oidcAllowedIssuers       []string
-	oidcGroupsClaim          string
-	oidcRoleMapping          map[string][]Permission
+	oidcEnabled        bool
+	oidcIssuer         string
+	oidcClientID       string
+	oidcPublishPerms   string
+	oidcEditPerms      string
+	oidcAllowedIssuers []string
+	oidcGroupsClaim    string
+	oidcRoleMapping    map[string][]Permission
 
 	// Bounded, thread-safe LRU/TTL verifier cache
 	cacheMu        sync.RWMutex
@@ -77,27 +75,25 @@ type JWTManager struct {
 }
 
 func NewJWTManager(cfg *config.Config) *JWTManager {
-	seed, err := hex.DecodeString(cfg.JWTPrivateKey)
-	if err != nil {
-		panic(fmt.Sprintf("JWTPrivateKey must be a valid hex-encoded string: %v", err))
-	}
+	var privateKey ed25519.PrivateKey
+	var publicKey ed25519.PublicKey
 
-	// Require a valid Ed25519 seed (32 bytes)
-	if len(seed) != ed25519.SeedSize {
-		panic(fmt.Sprintf("JWTPrivateKey seed must be exactly %d bytes for Ed25519, got %d bytes", ed25519.SeedSize, len(seed)))
-	}
-
-	// Generate the full Ed25519 key pair from the seed
-	privateKey := ed25519.NewKeyFromSeed(seed)
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-
-	allowedTenants := []string{}
-	if cfg.OIDCAllowedTenants != "" {
-		for _, t := range strings.Split(cfg.OIDCAllowedTenants, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				allowedTenants = append(allowedTenants, t)
-			}
+	if cfg.JWTPrivateKey != "" {
+		seed, err := hex.DecodeString(cfg.JWTPrivateKey)
+		if err != nil {
+			panic(fmt.Sprintf("JWTPrivateKey must be a valid hex-encoded string: %v", err))
+		}
+		if len(seed) != ed25519.SeedSize {
+			panic(fmt.Sprintf("JWTPrivateKey seed must be exactly %d bytes for Ed25519, got %d bytes", ed25519.SeedSize, len(seed)))
+		}
+		privateKey = ed25519.NewKeyFromSeed(seed)
+		publicKey = privateKey.Public().(ed25519.PublicKey)
+	} else {
+		// Secure ephemeral key pair generation when no raw private key is provided in process memory
+		var err error
+		publicKey, privateKey, err = ed25519.GenerateKey(nil)
+		if err != nil {
+			panic(fmt.Sprintf("failed to generate ephemeral Ed25519 key pair: %v", err))
 		}
 	}
 
@@ -122,22 +118,20 @@ func NewJWTManager(cfg *config.Config) *JWTManager {
 	}
 
 	return &JWTManager{
-		privateKey:               privateKey,
-		publicKey:                publicKey,
-		tokenDuration:            5 * time.Minute, // 5-minute tokens as per requirements
-		oidcEnabled:              cfg.OIDCEnabled,
-		oidcIssuer:               cfg.OIDCIssuer,
-		oidcClientID:             cfg.OIDCClientID,
-		oidcPublishPerms:         cfg.OIDCPublishPerms,
-		oidcEditPerms:            cfg.OIDCEditPerms,
-		oidcMsMultiTenantEnabled: cfg.OIDCMicrosoftMultiTenantEnabled,
-		oidcAllowedTenants:       allowedTenants,
-		oidcAllowedIssuers:       allowedIssuers,
-		oidcGroupsClaim:          groupsClaim,
-		oidcRoleMapping:          roleMapping,
-		verifiersCache:           make(map[string]*cachedVerifier),
-		cacheTTL:                 1 * time.Hour,
-		maxCacheSize:             100,
+		privateKey:         privateKey,
+		publicKey:          publicKey,
+		tokenDuration:      5 * time.Minute, // 5-minute tokens as per requirements
+		oidcEnabled:        cfg.OIDCEnabled,
+		oidcIssuer:         cfg.OIDCIssuer,
+		oidcClientID:       cfg.OIDCClientID,
+		oidcPublishPerms:   cfg.OIDCPublishPerms,
+		oidcEditPerms:      cfg.OIDCEditPerms,
+		oidcAllowedIssuers: allowedIssuers,
+		oidcGroupsClaim:    groupsClaim,
+		oidcRoleMapping:    roleMapping,
+		verifiersCache:     make(map[string]*cachedVerifier),
+		cacheTTL:           1 * time.Hour,
+		maxCacheSize:       100,
 	}
 }
 
@@ -182,27 +176,12 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	var verifier *oidc.IDTokenVerifier
-
-	// Special handling for Microsoft Multi-Tenant endpoints
-	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) {
-		// Discover Microsoft common provider
-		provider, err := oidc.NewProvider(initCtx, "https://login.microsoftonline.com/common/v2.0")
-		if err != nil {
-			return nil, fmt.Errorf("failed to discover Microsoft OIDC provider: %w", err)
-		}
-		// SkipIssuerCheck is required for MS Multi-Tenant because issuer includes dynamic tenant ID
-		verifier = provider.Verifier(&oidc.Config{
-			ClientID:        j.oidcClientID,
-			SkipIssuerCheck: true,
-		})
-	} else {
-		provider, err := oidc.NewProvider(initCtx, issuer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to discover OIDC provider %q: %w", issuer, err)
-		}
-		verifier = provider.Verifier(&oidc.Config{ClientID: j.oidcClientID})
+	// Strict OIDC provider initialization - zero SkipIssuerCheck bypasses
+	provider, err := oidc.NewProvider(initCtx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover OIDC provider %q: %w", issuer, err)
 	}
+	verifier := provider.Verifier(&oidc.Config{ClientID: j.oidcClientID})
 
 	// Bounded LRU cache size enforcement
 	if len(j.verifiersCache) >= j.maxCacheSize {
@@ -230,15 +209,7 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 
 func (j *JWTManager) isIssuerAllowed(issuer string) bool {
 	if len(j.oidcAllowedIssuers) == 0 {
-		// If no whitelist configured and oidcIssuer matches, allow
-		if j.oidcIssuer != "" && strings.HasPrefix(issuer, j.oidcIssuer) {
-			return true
-		}
-		// If Microsoft multi-tenant enabled, allow Microsoft domains by default
-		if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) {
-			return true
-		}
-		return j.oidcIssuer == "" || issuer == j.oidcIssuer
+		return j.oidcIssuer == "" || issuer == j.oidcIssuer || strings.HasPrefix(issuer, j.oidcIssuer)
 	}
 
 	for _, allowed := range j.oidcAllowedIssuers {
@@ -247,11 +218,6 @@ func (j *JWTManager) isIssuerAllowed(issuer string) bool {
 		}
 	}
 	return false
-}
-
-func isMicrosoftIssuer(issuer string) bool {
-	return strings.HasPrefix(issuer, "https://login.microsoftonline.com/") ||
-		strings.HasPrefix(issuer, "https://sts.windows.net/")
 }
 
 // GenerateTokenResponse generates a new Registry JWT token
@@ -345,20 +311,9 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		return nil, fmt.Errorf("failed to extract claims: %w", err)
 	}
 
-	// Validate Microsoft Tenant ID if Microsoft multi-tenant enabled
-	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(idToken.Issuer) {
-		tenantID, _ := oidcClaims["tid"].(string)
-		if !j.isTenantAllowed(tenantID) {
-			slog.Warn("Microsoft OIDC token rejected: tenant not allowed", "tid", tenantID, "sub", idToken.Subject)
-			return nil, fmt.Errorf("microsoft tenant ID %q is not authorized", tenantID)
-		}
-	}
-
-	// Extract subject identity: upn -> email -> sub
+	// Extract standard OIDC subject identity: email -> sub
 	var subIdentity string
-	if upn, ok := oidcClaims["upn"].(string); ok && upn != "" {
-		subIdentity = upn
-	} else if email, ok := oidcClaims["email"].(string); ok && email != "" {
+	if email, ok := oidcClaims["email"].(string); ok && email != "" {
 		if emailVerified, hasVerification := oidcClaims["email_verified"].(bool); hasVerification && !emailVerified {
 			slog.Warn("OIDC token rejected: unverified email claim", "email", email)
 			return nil, fmt.Errorf("unverified email claim rejected")
@@ -392,18 +347,6 @@ func (j *JWTManager) ValidateToken(ctx context.Context, tokenString string) (*JW
 		AuthMethodSubject: subIdentity,
 		Permissions:       permissions,
 	}, nil
-}
-
-func (j *JWTManager) isTenantAllowed(tenantID string) bool {
-	if len(j.oidcAllowedTenants) == 0 {
-		return true
-	}
-	for _, allowed := range j.oidcAllowedTenants {
-		if allowed == "*" || allowed == tenantID {
-			return true
-		}
-	}
-	return false
 }
 
 func (j *JWTManager) extractPermissionsFromClaims(claims map[string]any) []Permission {
@@ -452,7 +395,7 @@ func (j *JWTManager) extractPermissionsFromClaims(claims map[string]any) []Permi
 func extractGroupNames(claims map[string]any, groupsClaim string) []string {
 	var groups []string
 
-	for _, claimKey := range []string{groupsClaim, "groups", "roles", "wids"} {
+	for _, claimKey := range []string{groupsClaim, "groups", "roles"} {
 		if val, ok := claims[claimKey]; ok {
 			switch v := val.(type) {
 			case []interface{}:
