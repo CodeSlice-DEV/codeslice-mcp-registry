@@ -279,31 +279,15 @@ func (j *JWTManager) getOIDCVerifier(ctx context.Context, issuer string) (*oidc.
 		}
 	}
 
-	var verifier *oidc.IDTokenVerifier
-
-	// Special handling for Microsoft Multi-Tenant endpoints when not using offline JWKS
-	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) && j.oidcJwksJSON == "" && j.oidcJwksFile == "" {
-		// Discover Microsoft common provider
-		provider, err := oidc.NewProvider(initCtx, "https://login.microsoftonline.com/common/v2.0")
-		if err != nil {
-			return nil, fmt.Errorf("failed to discover Microsoft OIDC provider: %w", err)
-		}
-		// SkipIssuerCheck is required for MS Multi-Tenant because issuer includes dynamic tenant ID
-		verifier = provider.Verifier(&oidc.Config{
-			ClientID:        j.oidcClientID,
-			SkipIssuerCheck: true,
-		})
-	} else {
-		provider, err := oidc.NewProvider(initCtx, issuer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to discover OIDC provider %q: %w", issuer, err)
-		}
-		verifier = provider.Verifier(&oidc.Config{ClientID: j.oidcClientID})
+	// Strict OIDC provider initialization - zero SkipIssuerCheck bypasses
+	provider, err := oidc.NewProvider(initCtx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover OIDC provider %q: %w", issuer, err)
 	}
+	verifier := provider.Verifier(&oidc.Config{ClientID: j.oidcClientID})
 
 	// Bounded LRU cache size enforcement
 	if len(j.verifiersCache) >= j.maxCacheSize {
-		// Simple cache eviction of oldest entry
 		var oldestKey string
 		var oldestTime time.Time
 		for k, v := range j.verifiersCache {
@@ -333,11 +317,6 @@ func (j *JWTManager) isIssuerAllowed(issuer string) bool {
 	u, err := url.Parse(issuer)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return false
-	}
-
-	// If Microsoft multi-tenant is enabled, allow legitimate Microsoft domains
-	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(issuer) {
-		return true
 	}
 
 	// Fail closed if no allowed issuers configured
@@ -402,11 +381,6 @@ func (j *JWTManager) isTenantAllowed(tenantID string) bool {
 		}
 	}
 	return false
-}
-
-func isMicrosoftIssuer(issuer string) bool {
-	return strings.HasPrefix(issuer, "https://login.microsoftonline.com/") ||
-		strings.HasPrefix(issuer, "https://sts.windows.net/")
 }
 
 // GenerateTokenResponse generates a new Registry JWT token
@@ -495,7 +469,6 @@ func (j *JWTManager) validateOIDCToken(ctx context.Context, tokenString string, 
 
 	idToken, err := verifier.Verify(ctx, tokenString)
 	if err != nil {
-		slog.Warn("OIDC token verification failed", "issuer", tokenIssuer, "error", err)
 		return nil, fmt.Errorf("OIDC token verification failed: %w", err)
 	}
 
@@ -504,20 +477,9 @@ func (j *JWTManager) validateOIDCToken(ctx context.Context, tokenString string, 
 		return nil, fmt.Errorf("failed to parse OIDC claims: %w", err)
 	}
 
-	// Validate Microsoft Tenant ID if Microsoft multi-tenant enabled
-	if j.oidcMsMultiTenantEnabled && isMicrosoftIssuer(idToken.Issuer) {
-		tenantID, _ := oidcClaims["tid"].(string)
-		if !j.isTenantAllowed(tenantID) {
-			slog.Warn("Microsoft OIDC token rejected: tenant not allowed", "tid", tenantID, "sub", idToken.Subject)
-			return nil, fmt.Errorf("microsoft tenant ID %q is not authorized", tenantID)
-		}
-	}
-
-	// Extract subject identity: upn -> email -> sub
+	// Extract identity from claims
 	var subIdentity string
-	if upn, ok := oidcClaims["upn"].(string); ok && upn != "" {
-		subIdentity = upn
-	} else if email, ok := oidcClaims["email"].(string); ok && email != "" {
+	if email, ok := oidcClaims["email"].(string); ok && email != "" {
 		if emailVerified, hasVerification := oidcClaims["email_verified"].(bool); hasVerification && !emailVerified {
 			slog.Warn("OIDC token rejected: unverified email claim", "email", email)
 			return nil, fmt.Errorf("unverified email claim rejected")
@@ -568,6 +530,7 @@ func (j *JWTManager) validateOIDCToken(ctx context.Context, tokenString string, 
 		Permissions:       permissions,
 	}, nil
 }
+
 func (j *JWTManager) extractPermissionsFromClaims(claims map[string]any) []Permission {
 	var permissions []Permission
 
