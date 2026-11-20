@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/pkg/model"
@@ -33,6 +35,14 @@ func ValidatePyPI(ctx context.Context, pkg model.Package, serverName string) err
 
 	if pkg.Identifier == "" {
 		return ErrMissingIdentifierForPyPI
+	}
+
+	// In airgap mode, public PyPI registry is forbidden
+	if IsAirgapModeEnabled() {
+		allowedMirror := os.Getenv("MCP_REGISTRY_ALLOWED_PYPI_MIRROR")
+		if allowedMirror == "" || !strings.HasPrefix(pkg.RegistryBaseURL, allowedMirror) {
+			return fmt.Errorf("%w: public PyPI registry '%s' is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.RegistryBaseURL)
+		}
 	}
 
 	if pkg.Version == "" {

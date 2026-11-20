@@ -8,6 +8,15 @@ const (
 	StatusDeleted    Status = "deleted"
 )
 
+// SecurityProfile represents enterprise delegated authorization, HIC/Part 11, and data-pack integrity metadata (#2112).
+type SecurityProfile struct {
+	EntraOboResource        string   `json:"entraOboResource,omitempty" doc:"Entra ID On-Behalf-Of target resource identifier (api://...)" example:"api://mcp-safety-service"`
+	RequiredDelegatedScopes []string `json:"requiredDelegatedScopes,omitempty" doc:"Required OAuth/Entra delegated permission scopes" example:"[\"Safety.Read\", \"Safety.Write\"]"`
+	RequiresHicBeforeWrite  bool     `json:"requiresHicBeforeWrite" doc:"Requires Human-in-the-Loop approval before write-back mutations"`
+	BlindingClearanceLevel  string   `json:"blindingClearanceLevel,omitempty" doc:"Clinical study blinding clearance level (e.g. unblinded, blinded_study)" example:"unblinded"`
+	RequiredDataPackDigests []string `json:"requiredDataPackDigests,omitempty" doc:"SHA-256 content-addressed digests of mandatory data packs"`
+}
+
 // Transport represents transport configuration for both Package and Remote contexts.
 // For Remote context, the Variables field can be used for URL templating.
 type Transport struct {

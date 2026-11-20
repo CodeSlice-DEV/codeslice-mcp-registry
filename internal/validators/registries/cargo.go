@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/registry/pkg/model"
@@ -66,6 +68,14 @@ func ValidateCargo(ctx context.Context, pkg model.Package, serverName string) er
 
 	if pkg.Identifier == "" {
 		return ErrMissingIdentifierForCargo
+	}
+
+	// In airgap mode, public Cargo/crates.io registry is forbidden
+	if IsAirgapModeEnabled() {
+		allowedMirror := os.Getenv("MCP_REGISTRY_ALLOWED_CARGO_MIRROR")
+		if allowedMirror == "" || !strings.HasPrefix(pkg.RegistryBaseURL, allowedMirror) {
+			return fmt.Errorf("%w: public Cargo/crates.io registry '%s' is blocked in air-gap mode", ErrAirgapPublicRegistryForbidden, pkg.RegistryBaseURL)
+		}
 	}
 
 	if pkg.Version == "" {
@@ -220,6 +230,8 @@ func cargoReadmeStatusError(ctx context.Context, client *http.Client, pkg model.
 		return fmt.Errorf("crates.io rate-limited the README fetch for cargo package '%s' version '%s' (status: 429) — likely transient, retry later", pkg.Identifier, pkg.Version)
 	case status >= 500 && status < 600:
 		return fmt.Errorf("crates.io upstream error fetching README for cargo package '%s' version '%s' (status: %d) — likely transient, retry later", pkg.Identifier, pkg.Version, status)
+	case status == http.StatusNotFound:
+		return fmt.Errorf("cargo package '%s' version '%s' not found (status: 404)", pkg.Identifier, pkg.Version)
 	case status == http.StatusForbidden:
 		return cargoReadme403Error(ctx, client, pkg, serverName)
 	default:

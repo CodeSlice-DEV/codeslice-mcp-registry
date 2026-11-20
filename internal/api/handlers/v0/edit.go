@@ -56,6 +56,10 @@ func RegisterEditEndpoints(api huma.API, pathPrefix string, registry service.Reg
 			return nil, huma.Error401Unauthorized("Invalid or expired Registry JWT token", err)
 		}
 
+		if claims != nil && claims.TenantID != "" {
+			ctx = auth.WithTenantID(ctx, claims.TenantID)
+		}
+
 		// URL-decode the server name
 		serverName, err := url.PathUnescape(input.ServerName)
 		if err != nil {

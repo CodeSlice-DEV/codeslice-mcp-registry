@@ -6,37 +6,43 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/modelcontextprotocol/registry/internal/auth"
+	"github.com/modelcontextprotocol/registry/internal/config"
 	"github.com/modelcontextprotocol/registry/internal/database"
 	"github.com/modelcontextprotocol/registry/internal/service"
 	apiv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 )
 
-const errRecordNotFound = "record not found"
+const (
+	errRecordNotFound = "record not found"
+)
 
-// OptionalBool tracks whether a bool query parameter was explicitly set
+// OptionalBool is a tri-state boolean for query parameters
 type OptionalBool struct {
 	Value bool
 	IsSet bool
 }
 
-// Schema implements huma.SchemaProvider - returns schema for the wrapped type
-func (o OptionalBool) Schema(r huma.Registry) *huma.Schema {
-	return huma.SchemaFromType(r, reflect.TypeOf(o.Value))
-}
-
-// Receiver implements huma.ParamWrapper - exposes wrapped value to receive parsed value
-func (o *OptionalBool) Receiver() reflect.Value {
-	return reflect.ValueOf(o).Elem().Field(0)
-}
-
-// OnParamSet implements huma.ParamReactor - tracks whether parameter was set in request
-func (o *OptionalBool) OnParamSet(isSet bool, _ any) {
-	o.IsSet = isSet
+// UnmarshalText implements encoding.TextUnmarshaler for Huma query parameter decoding
+func (o *OptionalBool) UnmarshalText(text []byte) error {
+	str := strings.TrimSpace(string(text))
+	if str == "" {
+		o.Value = false
+		o.IsSet = false
+		return nil
+	}
+	val, err := strconv.ParseBool(str)
+	if err != nil {
+		return err
+	}
+	o.Value = val
+	o.IsSet = true
+	return nil
 }
 
 // resolveIncludeDeleted handles the include_deleted parameter logic for list endpoints
@@ -55,6 +61,7 @@ func resolveIncludeDeleted(includeDeleted OptionalBool, hasUpdatedSince bool) (b
 
 // ListServersInput represents the input for listing servers
 type ListServersInput struct {
+	Authorization  string       `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	Cursor         string       `query:"cursor" doc:"Pagination cursor" required:"false" example:"server-cursor-123"`
 	Limit          int          `query:"limit" doc:"Number of items per page" default:"30" minimum:"1" maximum:"100" example:"50"`
 	UpdatedSince   string       `query:"updated_since" doc:"Filter servers updated since timestamp (RFC3339 datetime)" required:"false" example:"2025-08-07T13:15:04.280Z"`
@@ -65,11 +72,13 @@ type ListServersInput struct {
 
 // ServerDetailInput represents the input for getting server details
 type ServerDetailInput struct {
-	ServerName string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
+	Authorization string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
+	ServerName    string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 }
 
 // ServerVersionDetailInput represents the input for getting a specific version
 type ServerVersionDetailInput struct {
+	Authorization  string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	ServerName     string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 	Version        string `path:"version" doc:"URL-encoded server version" example:"1.0.0"`
 	IncludeDeleted bool   `query:"include_deleted" doc:"Include deleted servers in results (default: false)" required:"false" default:"false"`
@@ -77,13 +86,94 @@ type ServerVersionDetailInput struct {
 
 // ServerVersionsInput represents the input for listing all versions of a server
 type ServerVersionsInput struct {
+	Authorization  string `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	ServerName     string `path:"serverName" doc:"URL-encoded server name" example:"com.example%2Fmy-server"`
 	IncludeDeleted bool   `query:"include_deleted" doc:"Include deleted servers in results (default: false)" required:"false" default:"false"`
 }
 
+func authenticateDiscovery(ctx context.Context, cfg *config.Config, authHeader string) (string, error) {
+	if cfg == nil {
+		return "", nil
+	}
+	if authHeader == "" {
+		if cfg.RequireAuthForDiscovery {
+			return "", huma.Error401Unauthorized("Authentication required for discovery")
+		}
+		return "", nil
+	}
+	const bearerPrefix = "Bearer "
+	if len(authHeader) < len(bearerPrefix) || !strings.EqualFold(authHeader[:len(bearerPrefix)], bearerPrefix) {
+		if cfg.RequireAuthForDiscovery {
+			return "", huma.Error401Unauthorized("Invalid Authorization header format. Expected 'Bearer <token>'")
+		}
+		return "", nil
+	}
+	token := strings.TrimSpace(authHeader[len(bearerPrefix):])
+	jwtMgr := auth.NewJWTManager(cfg)
+	claims, err := jwtMgr.ValidateToken(ctx, token)
+	if err != nil {
+		if cfg.RequireAuthForDiscovery {
+			return "", huma.Error401Unauthorized("Invalid bearer token", err)
+		}
+		return "", nil
+	}
+	if claims == nil {
+		return "", nil
+	}
+	return claims.TenantID, nil
+}
+
 // RegisterServersEndpoints registers all server-related endpoints with a custom path prefix
-func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.RegistryService) {
-	// List servers endpoint
+func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.RegistryService, cfg ...*config.Config) {
+	var activeCfg *config.Config
+	if len(cfg) > 0 && cfg[0] != nil {
+		activeCfg = cfg[0]
+	}
+
+	registerListServersEndpoint(api, pathPrefix, registry, activeCfg)
+	registerGetServerDetailEndpoint(api, pathPrefix, registry, activeCfg)
+	registerGetServerVersionEndpoint(api, pathPrefix, registry, activeCfg)
+	registerGetServerVersionsEndpoint(api, pathPrefix, registry, activeCfg)
+}
+
+func registerGetServerDetailEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
+	huma.Register(api, huma.Operation{
+		OperationID: "get-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodGet,
+		Path:        pathPrefix + "/servers/{serverName}",
+		Summary:     "Get MCP server details",
+		Description: "Get detailed information about the latest version of an MCP server",
+		Tags:        []string{tagServers},
+	}, func(ctx context.Context, input *ServerDetailInput) (*Response[apiv0.ServerResponse], error) {
+		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
+		if tenantID != "" {
+			ctx = auth.WithTenantID(ctx, tenantID)
+		}
+
+		serverName, err := url.PathUnescape(input.ServerName)
+		if err != nil {
+			return nil, huma.Error400BadRequest("Invalid server name encoding", err)
+		}
+
+		serverResponse, err := registry.GetServerByName(ctx, serverName, false)
+		if err != nil {
+			if err.Error() == errRecordNotFound || errors.Is(err, database.ErrNotFound) {
+				return nil, huma.Error404NotFound("Server not found")
+			}
+			log.Printf("get server details (%q) failed: %v", serverName, err)
+			return nil, huma.Error500InternalServerError("Failed to get server details")
+		}
+
+		return &Response[apiv0.ServerResponse]{
+			Body: *serverResponse,
+		}, nil
+	})
+}
+
+func registerListServersEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-servers" + strings.ReplaceAll(pathPrefix, "/", "-"),
 		Method:      http.MethodGet,
@@ -92,12 +182,18 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get a paginated list of MCP servers from the registry",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ListServersInput) (*Response[apiv0.ServerListResponse], error) {
-		// Build filter from input parameters
-		filter := &database.ServerFilter{}
+		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
 
-		// Parse updated_since parameter
+		filter := &database.ServerFilter{}
+		if tenantID != "" {
+			ctx = auth.WithTenantID(ctx, tenantID)
+			filter.TenantID = &tenantID
+		}
+
 		if input.UpdatedSince != "" {
-			// Parse RFC3339 format
 			if updatedTime, err := time.Parse(time.RFC3339, input.UpdatedSince); err == nil {
 				filter.UpdatedSince = &updatedTime
 			} else {
@@ -105,37 +201,30 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 			}
 		}
 
-		// Handle search parameter
 		if input.Search != "" {
 			filter.SubstringName = &input.Search
 		}
 
-		// Handle version parameter
 		if input.Version != "" {
 			if input.Version == "latest" {
-				// Special case: filter for latest versions
 				isLatest := true
 				filter.IsLatest = &isLatest
 			} else {
-				// Future: exact version matching
 				filter.Version = &input.Version
 			}
 		}
 
-		// Handle include_deleted parameter
 		includeDeleted, err := resolveIncludeDeleted(input.IncludeDeleted, filter.UpdatedSince != nil)
 		if err != nil {
 			return nil, err
 		}
 		filter.IncludeDeleted = &includeDeleted
 
-		// Get paginated results with filtering
 		servers, nextCursor, err := registry.ListServers(ctx, filter, input.Cursor, input.Limit)
 		if err != nil {
 			return nil, ListServersError(ctx, err)
 		}
 
-		// Convert []*ServerResponse to []ServerResponse
 		serverValues := make([]apiv0.ServerResponse, len(servers))
 		for i, server := range servers {
 			serverValues[i] = *server
@@ -151,8 +240,9 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 			},
 		}, nil
 	})
+}
 
-	// Get specific server version endpoint (supports "latest" as special version)
+func registerGetServerVersionEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-server-version" + strings.ReplaceAll(pathPrefix, "/", "-"),
 		Method:      http.MethodGet,
@@ -161,20 +251,25 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get detailed information about a specific version of an MCP server. Use the special version 'latest' to get the latest version.",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ServerVersionDetailInput) (*Response[apiv0.ServerResponse], error) {
-		// URL-decode the server name
+		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
+		if tenantID != "" {
+			ctx = auth.WithTenantID(ctx, tenantID)
+		}
+
 		serverName, err := url.PathUnescape(input.ServerName)
 		if err != nil {
 			return nil, huma.Error400BadRequest("Invalid server name encoding", err)
 		}
 
-		// URL-decode the version
 		version, err := url.PathUnescape(input.Version)
 		if err != nil {
 			return nil, huma.Error400BadRequest("Invalid version encoding", err)
 		}
 
 		var serverResponse *apiv0.ServerResponse
-		// Handle "latest" as a special version
 		if version == "latest" {
 			serverResponse, err = registry.GetServerByName(ctx, serverName, input.IncludeDeleted)
 		} else {
@@ -193,8 +288,9 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 			Body: *serverResponse,
 		}, nil
 	})
+}
 
-	// Get server versions endpoint
+func registerGetServerVersionsEndpoint(api huma.API, pathPrefix string, registry service.RegistryService, activeCfg *config.Config) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-server-versions" + strings.ReplaceAll(pathPrefix, "/", "-"),
 		Method:      http.MethodGet,
@@ -203,13 +299,19 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 		Description: "Get all available versions for a specific MCP server",
 		Tags:        []string{tagServers},
 	}, func(ctx context.Context, input *ServerVersionsInput) (*Response[apiv0.ServerListResponse], error) {
-		// URL-decode the server name
+		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
+		if authErr != nil {
+			return nil, authErr
+		}
+		if tenantID != "" {
+			ctx = auth.WithTenantID(ctx, tenantID)
+		}
+
 		serverName, err := url.PathUnescape(input.ServerName)
 		if err != nil {
 			return nil, huma.Error400BadRequest("Invalid server name encoding", err)
 		}
 
-		// Get all versions for this server
 		servers, err := registry.GetAllVersionsByServerName(ctx, serverName, input.IncludeDeleted)
 		if err != nil {
 			if err.Error() == errRecordNotFound || errors.Is(err, database.ErrNotFound) {
@@ -219,7 +321,6 @@ func RegisterServersEndpoints(api huma.API, pathPrefix string, registry service.
 			return nil, huma.Error500InternalServerError("Failed to get server versions")
 		}
 
-		// Convert []*ServerResponse to []ServerResponse
 		serverValues := make([]apiv0.ServerResponse, len(servers))
 		for i, server := range servers {
 			serverValues[i] = *server

@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -18,7 +20,7 @@ const templateDBName = "mcp_registry_test_template"
 
 // ensureTemplateDB creates a template database with migrations applied
 // Multiple processes may call this, so we handle race conditions
-func ensureTemplateDB(ctx context.Context, adminConn *pgx.Conn) error {
+func ensureTemplateDB(ctx context.Context, adminConn *pgx.Conn, adminURI string) error {
 	// Check if template exists
 	var exists bool
 	err := adminConn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", templateDBName).Scan(&exists)
@@ -43,8 +45,12 @@ func ensureTemplateDB(ctx context.Context, adminConn *pgx.Conn) error {
 	}
 
 	// Connect to template and run migrations
-	templateURI := fmt.Sprintf("postgres://mcpregistry:mcpregistry@localhost:5432/%s?sslmode=disable", templateDBName)
-	templateDB, err := NewPostgreSQL(ctx, templateURI)
+	templateURL, err := url.Parse(adminURI)
+	if err != nil {
+		return fmt.Errorf("failed to parse admin database URL: %w", err)
+	}
+	templateURL.Path = "/" + templateDBName
+	templateDB, err := NewPostgreSQL(ctx, templateURL.String())
 	if err != nil {
 		return fmt.Errorf("failed to connect to template database: %w", err)
 	}
@@ -64,13 +70,19 @@ func NewTestDB(t *testing.T) Database {
 	defer cancel()
 
 	// Connect to postgres database
-	adminURI := "postgres://mcpregistry:mcpregistry@localhost:5432/postgres?sslmode=disable" //nolint:gosec // G101: test database credentials
+	adminURI := os.Getenv("TEST_DATABASE_URL")
+	if adminURI == "" {
+		adminURI = "postgres://mcpregistry:mcpregistry@localhost:5432/postgres?sslmode=disable" //nolint:gosec // G101: test database credentials
+	}
 	adminConn, err := pgx.Connect(ctx, adminURI)
-	require.NoError(t, err, "Failed to connect to PostgreSQL. Make sure PostgreSQL is running via: docker-compose up -d postgres")
+	if err != nil {
+		t.Skipf("Failed to connect to PostgreSQL: %v (make sure PostgreSQL is running via: docker-compose up -d postgres)", err)
+		return nil
+	}
 	defer adminConn.Close(ctx)
 
 	// Ensure template database exists with migrations
-	err = ensureTemplateDB(ctx, adminConn)
+	err = ensureTemplateDB(ctx, adminConn, adminURI)
 	require.NoError(t, err, "Failed to initialize template database")
 
 	// Generate unique database name for this test
@@ -100,9 +112,11 @@ func NewTestDB(t *testing.T) Database {
 	})
 
 	// Connect to test database (no migrations needed - copied from template)
-	testURI := fmt.Sprintf("postgres://mcpregistry:mcpregistry@localhost:5432/%s?sslmode=disable", dbName)
+	testURL, err := url.Parse(adminURI)
+	require.NoError(t, err, "Failed to parse admin database URL")
+	testURL.Path = "/" + dbName
 
-	db, err := NewPostgreSQL(ctx, testURI)
+	db, err := NewPostgreSQL(ctx, testURL.String())
 	require.NoError(t, err, "Failed to connect to test database")
 
 	// Register cleanup to close connection

@@ -21,7 +21,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
       with:
-        go-version: 'stable'
+        go-version: '1.26'
         cache: true
 
     - name: Run lint
@@ -36,9 +36,9 @@ jobs:
       run: make build
 
     - name: Run govulncheck
-      uses: golang/govulncheck-action@v1
+      uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
       with:
-        go-version-input: 'stable'
+        go-version-input: '1.26'
         go-package: ./...
         repo-checkout: false
 
@@ -53,11 +53,11 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
       with:
-        go-version: 'stable'
+        go-version: '1.26'
         cache: true
 
     - name: Set up ko
-      uses: ko-build/setup-ko@v0.10
+      uses: ko-build/setup-ko@ace48d793556083a76f1e3e6068850c1f4a369aa # v0.10
 
     - name: Run all tests
       run: make test-all

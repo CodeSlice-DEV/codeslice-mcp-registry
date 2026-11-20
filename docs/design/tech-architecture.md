@@ -6,9 +6,8 @@
 > implemented, see the [API reference](../reference/api/official-registry-api.md).
 >
 > Known inaccuracies below, as of 2026-08-10:
-> - The registry is not deployed via a Helm chart. It is a plain Kubernetes `Deployment` created by
->   Pulumi; Helm is used only for third-party components (ingress-nginx, cert-manager,
->   cloudnative-pg, k8up, monitoring).
+> - The registry is deployed via Helm chart (`deploy/helm/mcp-registry`) and OpenTofu (`deploy/opentofu`),
+>   with Envoy Gateway (Gateway API), cert-manager, CloudNativePG, Apache Ozone, and Perses.
 > - The database diagram shows a `StatefulSet` on port `27017` (MongoDB). The database is PostgreSQL
 >   on `5432`, provisioned by the CloudNativePG operator.
 > - The DNS verification sequence (`mcp verify-domain`, `POST /verify-domain`,

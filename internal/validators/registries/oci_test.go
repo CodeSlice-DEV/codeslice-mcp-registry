@@ -314,3 +314,116 @@ func TestValidateOCI_LabelMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "ownership validation failed")
 	assert.Contains(t, err.Error(), "Expected annotation")
 }
+
+func TestValidateOCI_HarborAndCustomRegistries(t *testing.T) {
+	ctx := context.Background()
+
+	// Custom allowlist via env enabling CNCF Harbor and Distribution
+	t.Setenv("MCP_REGISTRY_ALLOWED_OCI_REGISTRIES", "harbor.example.com,custom-distribution.org,*.internal.net")
+
+	pkgHarbor := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "harbor.example.com/project/server:1.0.0",
+	}
+	err := registries.ValidateOCI(ctx, pkgHarbor, "com.example/server")
+	// Should fail with network error/image not found, NOT unsupported registry
+	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), "unsupported OCI registry")
+
+	pkgCustom := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "custom-distribution.org/myorg/mcp:v1",
+	}
+	errCustom := registries.ValidateOCI(ctx, pkgCustom, "org.myorg/mcp")
+	assert.Error(t, errCustom)
+	assert.NotContains(t, errCustom.Error(), "unsupported OCI registry")
+
+	pkgWildcard := model.Package{
+		RegistryType: model.RegistryTypeOCI,
+		Identifier:   "registry.internal.net/myorg/mcp:v1",
+	}
+	errWildcard := registries.ValidateOCI(ctx, pkgWildcard, "org.myorg/mcp")
+	assert.Error(t, errWildcard)
+	assert.NotContains(t, errWildcard.Error(), "unsupported OCI registry")
+}
+
+func TestValidateOCI_AirgapMode(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MCP_REGISTRY_AIRGAP_MODE", "true")
+
+	// 1. Rejection of public registries in airgap mode
+	t.Run("public registry rejected in airgap mode", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "docker.io/library/alpine@sha256:99d9e266817079005f3ec33bc6aabbb63814b46c1b9036276452b3f7738cedb5",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "com.example/alpine")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "public registry is forbidden in air-gap mode")
+	})
+
+	// 2. Rejection of mutable tags in airgap mode
+	t.Run("mutable tag rejected in airgap mode", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety:v1.0.0",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/veeva-vault-safety-mcp")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must be pinned to an immutable digest")
+	})
+
+	// 3. Rejection of dummy empty string hash
+	t.Run("dummy sha256 empty string hash rejected", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/veeva-vault-safety-mcp")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "placeholder or dummy hash detected")
+	})
+
+	// 4. Rejection of dummy single-char hash
+	t.Run("dummy sha256 single character hash rejected", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/oracle-argus-safety@sha256:ca978112ca1bbdcafac231b39a23dc4da78608149614097b6004fb68640fa67e",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/oracle-argus-safety-mcp")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "placeholder or dummy hash detected")
+	})
+
+	// 5. Rejection of all zeroes placeholder
+	t.Run("all zeroes placeholder digest rejected", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/veeva-vault-safety-mcp")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "placeholder or dummy hash detected")
+	})
+
+	// 6. Rejection of repository name mismatch
+	t.Run("repository name mismatch rejected", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/completely-unrelated@sha256:99d9e266817079005f3ec33bc6aabbb63814b46c1b9036276452b3f7738cedb5",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/veeva-vault-safety-mcp")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "repository path does not match server name")
+	})
+
+	// 7. Successful validation with authentic private ACR digest and matching repo
+	t.Run("authentic private ACR digest with matching repository passes", func(t *testing.T) {
+		pkg := model.Package{
+			RegistryType: model.RegistryTypeOCI,
+			Identifier:   "acrcodeslicereadiness.azurecr.io/mcp/veeva-vault-safety@sha256:99d9e266817079005f3ec33bc6aabbb63814b46c1b9036276452b3f7738cedb5",
+		}
+		err := registries.ValidateOCI(ctx, pkg, "dev.codeslice/veeva-vault-safety-mcp")
+		assert.NoError(t, err)
+	})
+}

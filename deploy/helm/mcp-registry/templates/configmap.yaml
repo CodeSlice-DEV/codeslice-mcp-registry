@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-registry.fullname" . }}-config
+  labels:
+    {{- include "mcp-registry.labels" . | nindent 4 }}
+data:
+  SERVER_ADDRESS: ":{{ .Values.service.targetPort }}"
+  ENABLE_ANONYMOUS_AUTH: "false"
+  ENABLE_REGISTRY_VALIDATION: "true"
+  OIDC_ENABLED: {{ .Values.oidc.enabled | quote }}
+  OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
+  OIDC_CLIENT_ID: {{ .Values.oidc.clientID | quote }}
+  OIDC_ALLOWED_ISSUERS: {{ .Values.oidc.allowedIssuers | quote }}
+  OIDC_GROUPS_CLAIM: {{ .Values.oidc.groupsClaim | quote }}
+  OIDC_PUBLISH_PERMISSIONS: {{ .Values.oidc.publishPermissions | quote }}
+  OIDC_EDIT_PERMISSIONS: {{ .Values.oidc.editPermissions | quote }}
+  ALLOWED_OCI_REGISTRIES: {{ .Values.oci.allowedRegistries | quote }}
+  REQUIRE_SIGSTORE: {{ .Values.oci.requireSigstore | quote }}

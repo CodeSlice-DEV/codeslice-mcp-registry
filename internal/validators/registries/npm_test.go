@@ -314,3 +314,18 @@ func TestValidateNPM_RealPackages(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateNPM_AirgapMode(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MCP_REGISTRY_AIRGAP_MODE", "true")
+
+	pkg := model.Package{
+		RegistryType: model.RegistryTypeNPM,
+		Identifier:   "@example/test-pkg",
+		Version:      "1.0.0",
+	}
+
+	err := registries.ValidateNPM(ctx, pkg, "com.example/test-pkg")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "public registry is forbidden in air-gap mode")
+}

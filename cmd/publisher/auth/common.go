@@ -19,6 +19,12 @@ import (
 	"time"
 )
 
+// RegistryTokenResponse represents the response from the registry's token exchange endpoint.
+type RegistryTokenResponse struct {
+	RegistryToken string `json:"registry_token"`
+	ExpiresAt     int64  `json:"expires_at"`
+}
+
 type CryptoAlgorithm string
 
 const (

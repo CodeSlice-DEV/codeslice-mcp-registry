@@ -24,17 +24,7 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 	// Create JWT manager for token validation
 	jwtManager := auth.NewJWTManager(cfg)
 
-	huma.Register(api, huma.Operation{
-		OperationID: "publish-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
-		Method:      http.MethodPost,
-		Path:        pathPrefix + "/publish",
-		Summary:     "Publish MCP server",
-		Description: "Publish a new MCP server to the registry or update an existing one",
-		Tags:        []string{"publish"},
-		Security: []map[string][]string{
-			{securitySchemeBearer: {}},
-		},
-	}, func(ctx context.Context, input *PublishServerInput) (*Response[apiv0.ServerResponse], error) {
+	handler := func(ctx context.Context, input *PublishServerInput) (*Response[apiv0.ServerResponse], error) {
 		// Extract bearer token
 		const bearerPrefix = "Bearer "
 		authHeader := input.Authorization
@@ -49,9 +39,20 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 			return nil, huma.Error401Unauthorized("Invalid or expired Registry JWT token", err)
 		}
 
+		if claims != nil && claims.TenantID != "" {
+			ctx = auth.WithTenantID(ctx, claims.TenantID)
+		}
+
 		// Verify that the token has permission to publish the server
 		if !jwtManager.HasPermission(input.Body.Name, auth.PermissionActionPublish, claims.Permissions) {
 			return nil, huma.Error403Forbidden(buildPermissionErrorMessage(input.Body.Name, claims.Permissions))
+		}
+
+		// Enterprise security profiles require valid tenant identity in staging / production (#2112)
+		if input.Body.SecurityProfile != nil {
+			if (cfg.EnvironmentTier == "production" || cfg.EnvironmentTier == "staging") && (claims == nil || claims.TenantID == "") {
+				return nil, huma.Error403Forbidden("Publishing servers with a SecurityProfile requires tenant-scoped authentication")
+			}
 		}
 
 		// Validate server JSON structure and schema (returns 422 on validation failure)
@@ -70,7 +71,31 @@ func RegisterPublishEndpoint(api huma.API, pathPrefix string, registry service.R
 		return &Response[apiv0.ServerResponse]{
 			Body: *publishedServer,
 		}, nil
-	})
+	}
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-server" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodPost,
+		Path:        pathPrefix + "/publish",
+		Summary:     "Publish MCP server",
+		Description: "Publish a new MCP server to the registry or update an existing one",
+		Tags:        []string{"publish"},
+		Security: []map[string][]string{
+			{securitySchemeBearer: {}},
+		},
+	}, handler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-server-alias" + strings.ReplaceAll(pathPrefix, "/", "-"),
+		Method:      http.MethodPost,
+		Path:        pathPrefix + "/servers",
+		Summary:     "Publish MCP server (alias)",
+		Description: "Publish a new MCP server to the registry or update an existing one",
+		Tags:        []string{"publish"},
+		Security: []map[string][]string{
+			{securitySchemeBearer: {}},
+		},
+	}, handler)
 }
 
 // buildPermissionErrorMessage creates a detailed error message showing what permissions
