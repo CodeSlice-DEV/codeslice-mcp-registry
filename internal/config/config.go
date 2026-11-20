@@ -9,6 +9,9 @@ import (
 type Config struct {
 	ServerAddress            string `env:"SERVER_ADDRESS" envDefault:":8080"`
 	DatabaseURL              string `env:"DATABASE_URL" envDefault:"postgres://localhost:5432/mcp-registry?sslmode=disable"`
+	DatabaseMaxConnections   int32  `env:"DATABASE_MAX_CONNECTIONS" envDefault:"60"`
+	DatabaseMinConnections   int32  `env:"DATABASE_MIN_CONNECTIONS" envDefault:"10"`
+	PreparedListingJSON      bool   `env:"PREPARED_LISTING_JSON" envDefault:"false"`
 	SeedFrom                 string `env:"SEED_FROM" envDefault:""`
 	Version                  string `env:"VERSION" envDefault:"dev"`
 	GithubClientID           string `env:"GITHUB_CLIENT_ID" envDefault:""`

@@ -1,6 +1,6 @@
 module github.com/modelcontextprotocol/registry
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
@@ -20,6 +20,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/sdk/metric v1.45.0
 	golang.org/x/mod v0.40.0
+	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

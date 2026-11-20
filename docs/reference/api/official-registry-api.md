@@ -39,11 +39,25 @@ The official registry extends the `GET /v0.1/servers` endpoint with additional q
 
 - `updated_since` - Filter servers updated after RFC3339 timestamp (e.g., `2025-08-07T13:15:04.280Z`)
 - `search` - Case-insensitive substring search on server names (e.g., `filesystem`)
+    - A nonempty search must contain at least three Unicode characters after trimming surrounding whitespace. Shorter or whitespace-only searches return HTTP `422` before database work. Surrounding whitespace is ignored only for this length check; substring matching remains unchanged.
+    - Omitted or empty `search` retains normal listing behavior. Invalid short searches are never treated as unfiltered listings. This restriction changes previously accepted one- and two-character searches.
     - This is intentionally simple. For more advanced searching and filtering, use a subregistry.
-- `version` - Filter by version (currently supports `latest` for latest versions only)
+- `version` - Filter by version (`latest` for latest versions only, or an exact version such as `1.2.3`)
 - `include_deleted` - Include deleted servers in results (default: `false`, but automatically `true` when `updated_since` is provided for incremental sync)
 
 These extensions enable efficient incremental synchronization for downstream registries and improved server discovery. Parameters can be combined and work with standard cursor-based pagination.
+
+Listings contain one record per server version. Without a `version` filter, results can include multiple versions of the same server, including superseded versions. This also applies when `search` is provided.
+
+Results are ordered by server name, then by version string, both ascending. Version strings are compared as text, not by semantic version or publication date; for example, `1.10.0` sorts before `1.2.0`. Do not treat the first result for a server as its latest version.
+
+To retrieve only the latest version of each matching server, pass `version=latest`. Returned records have `_meta["io.modelcontextprotocol.registry/official"].isLatest` set to `true`. Keep the same filters when following `metadata.nextCursor` to subsequent pages.
+
+Deprecating a version does not, by itself, remove its `isLatest` flag. A deprecated version can remain the latest version of a server, so `version=latest` and the `/versions/latest` endpoint do not guarantee an active result. Clients that display only active servers must also check `_meta["io.modelcontextprotocol.registry/official"].status == "active"`. To select an older active version when the latest is deprecated, inspect the server's version history and apply your own selection policy; filtering the latest result does not select a replacement automatically.
+
+Example: `GET /v0.1/servers?search=filesystem&version=latest`
+
+When the complete server name is known, use `GET /v0.1/servers/{url-encoded-server-name}/versions/latest` (or a specific version) instead of substring search. For example: `GET /v0.1/servers/io.github.example%2Fweather/versions/latest`.
 
 Example: `GET /v0.1/servers?search=filesystem&updated_since=2025-08-01T00:00:00Z&version=latest`
 

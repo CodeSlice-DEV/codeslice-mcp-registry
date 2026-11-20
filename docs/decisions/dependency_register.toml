@@ -184,6 +184,16 @@ decision = "keep"
 exception = false
 rationale = "Go module and version parsing utilities."
 
+[packages."golang.org/x/time"]
+scope = "core"
+scopes = ["core"]
+license = "BSD-3-Clause"
+governance = "Go Authors / Google"
+maturity = "stable"
+decision = "keep"
+exception = false
+rationale = "Rate limiting utility for slow listing telemetry diagnostics."
+
 [packages."gopkg.in/yaml.v3"]
 scope = "core"
 scopes = ["core"]

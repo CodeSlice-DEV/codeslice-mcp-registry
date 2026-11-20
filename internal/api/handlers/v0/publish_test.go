@@ -103,6 +103,25 @@ func TestPublishEndpoint(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
+			name: "reject publish with empty repository",
+			requestBody: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "example/test-server",
+				Description: "A test server",
+				Repository:  &model.Repository{},
+				Version:     "1.0.0",
+			},
+			tokenClaims: &auth.JWTClaims{
+				AuthMethod: auth.MethodNone,
+				Permissions: []auth.Permission{
+					{Action: auth.PermissionActionPublish, ResourcePattern: "example/*"},
+				},
+			},
+			setupRegistryService: func(_ service.RegistryService) {},
+			expectedStatus:       http.StatusUnprocessableEntity,
+			expectedError:        "Failed to publish server, invalid schema: call /validate for details",
+		},
+		{
 			name:        "missing authorization header",
 			requestBody: apiv0.ServerJSON{},
 			authHeader:  "", // Empty auth header
@@ -168,7 +187,7 @@ func TestPublishEndpoint(t *testing.T) {
 			expectedError:  "You do not have permission to publish this server",
 		},
 		{
-			name: "registry service error",
+			name: "duplicate version includes submitted server identity",
 			requestBody: apiv0.ServerJSON{
 				Schema:      model.CurrentSchemaURL,
 				Name:        "example/test-server",
@@ -202,7 +221,7 @@ func TestPublishEndpoint(t *testing.T) {
 				_, _ = registry.CreateServer(context.Background(), &existingServer)
 			},
 			expectedStatus: http.StatusBadRequest,
-			expectedError:  "invalid version: cannot publish duplicate version",
+			expectedError:  "invalid version: cannot publish duplicate version: example/test-server@1.0.0 already exists",
 		},
 		{
 			name: "package validation success - MCPB package",
@@ -373,6 +392,41 @@ func TestPublishEndpoint(t *testing.T) {
 				Name:        "com.example/test-server",
 				Description: "A test server",
 				Version:     "^1.0.0", // Version range, not allowed
+			},
+			tokenClaims: &auth.JWTClaims{
+				AuthMethod: auth.MethodNone,
+				Permissions: []auth.Permission{
+					{Action: auth.PermissionActionPublish, ResourcePattern: "*"},
+				},
+			},
+			setupRegistryService: func(_ service.RegistryService) {},
+			expectedStatus:       http.StatusUnprocessableEntity,
+			expectedError:        "Failed to publish server, invalid schema: call /validate for details",
+		},
+		{
+			name: "invalid argument - empty type",
+			requestBody: apiv0.ServerJSON{
+				Schema:      model.CurrentSchemaURL,
+				Name:        "com.example/test-server",
+				Description: "A test server",
+				Version:     "1.0.0",
+				Packages: []model.Package{
+					{
+						RegistryType: model.RegistryTypeNPM,
+						Identifier:   "test-package",
+						Version:      "1.0.0",
+						Transport: model.Transport{
+							Type: model.TransportTypeStdio,
+						},
+						RuntimeArguments: []model.Argument{
+							{
+								InputWithVariables: model.InputWithVariables{Input: model.Input{Value: "mcp"}},
+								Type:               "", // type present but empty string, not a missing key
+								Name:               "command",
+							},
+						},
+					},
+				},
 			},
 			tokenClaims: &auth.JWTClaims{
 				AuthMethod: auth.MethodNone,

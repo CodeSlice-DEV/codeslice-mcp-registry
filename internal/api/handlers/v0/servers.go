@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelcontextprotocol/registry/internal/auth"
@@ -59,13 +60,26 @@ func resolveIncludeDeleted(includeDeleted OptionalBool, hasUpdatedSince bool) (b
 	return includeDeleted.Value, nil
 }
 
+// applySearchFilter rejects invalid terms before service/database work. Empty search
+// retains listing behavior, and valid terms retain their original matching semantics.
+func applySearchFilter(filter *database.ServerFilter, search string) error {
+	if search == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(search)) < 3 {
+		return huma.Error422UnprocessableEntity("search must contain at least 3 characters after trimming surrounding whitespace")
+	}
+	filter.SubstringName = &search
+	return nil
+}
+
 // ListServersInput represents the input for listing servers
 type ListServersInput struct {
 	Authorization  string       `header:"Authorization" doc:"Bearer token for authentication" required:"false"`
 	Cursor         string       `query:"cursor" doc:"Pagination cursor" required:"false" example:"server-cursor-123"`
 	Limit          int          `query:"limit" doc:"Number of items per page" default:"30" minimum:"1" maximum:"100" example:"50"`
 	UpdatedSince   string       `query:"updated_since" doc:"Filter servers updated since timestamp (RFC3339 datetime)" required:"false" example:"2025-08-07T13:15:04.280Z"`
-	Search         string       `query:"search" doc:"Search servers by name (substring match)" required:"false" example:"filesystem"`
+	Search         string       `query:"search" doc:"Search servers by name (substring match); nonempty searches require at least 3 characters after trimming surrounding whitespace" required:"false" example:"filesystem"`
 	Version        string       `query:"version" doc:"Filter by version ('latest' for latest version, or an exact version like '1.2.3')" required:"false" example:"latest"`
 	IncludeDeleted OptionalBool `query:"include_deleted" doc:"Include deleted servers in results (default: false, but always true when updated_since is provided)" required:"false"`
 }
@@ -179,8 +193,10 @@ func registerListServersEndpoint(api huma.API, pathPrefix string, registry servi
 		Method:      http.MethodGet,
 		Path:        pathPrefix + "/servers",
 		Summary:     "List MCP servers",
-		Description: "Get a paginated list of MCP servers from the registry",
-		Tags:        []string{tagServers},
+		Description: "Get a paginated list with one record per server version. Without a version filter, results include superseded versions, including when search is provided. " +
+			"Results are ordered by server name, then by version string, both ascending. Versions are compared as text, not by semantic version or publication date; the first result for a server is not necessarily its latest version. " +
+			"Use version=latest to return only the latest version of each matching server. Keep the same filters when following metadata.nextCursor.",
+		Tags: []string{tagServers},
 	}, func(ctx context.Context, input *ListServersInput) (*Response[apiv0.ServerListResponse], error) {
 		tenantID, authErr := authenticateDiscovery(ctx, activeCfg, input.Authorization)
 		if authErr != nil {
@@ -201,8 +217,8 @@ func registerListServersEndpoint(api huma.API, pathPrefix string, registry servi
 			}
 		}
 
-		if input.Search != "" {
-			filter.SubstringName = &input.Search
+		if err := applySearchFilter(filter, input.Search); err != nil {
+			return nil, err
 		}
 
 		if input.Version != "" {
@@ -220,25 +236,12 @@ func registerListServersEndpoint(api huma.API, pathPrefix string, registry servi
 		}
 		filter.IncludeDeleted = &includeDeleted
 
-		servers, nextCursor, err := registry.ListServers(ctx, filter, input.Cursor, input.Limit)
+		encoded := activeCfg != nil && activeCfg.PreparedListingJSON
+		body, err := listServersBody(ctx, registry, filter, input, encoded)
 		if err != nil {
 			return nil, ListServersError(ctx, err)
 		}
-
-		serverValues := make([]apiv0.ServerResponse, len(servers))
-		for i, server := range servers {
-			serverValues[i] = *server
-		}
-
-		return &Response[apiv0.ServerListResponse]{
-			Body: apiv0.ServerListResponse{
-				Servers: serverValues,
-				Metadata: apiv0.Metadata{
-					NextCursor: nextCursor,
-					Count:      len(servers),
-				},
-			},
-		}, nil
+		return &Response[apiv0.ServerListResponse]{Body: body}, nil
 	})
 }
 
@@ -335,4 +338,24 @@ func registerGetServerVersionsEndpoint(api huma.API, pathPrefix string, registry
 			},
 		}, nil
 	})
+}
+
+// Encoded responses are enabled only by the production router, which disables
+// Huma's schema-link transformer. That transformer reconstructs structs from
+// exported fields and cannot preserve a private serialized representation.
+func listServersBody(ctx context.Context, registry service.RegistryService, filter *database.ServerFilter, input *ListServersInput, encoded bool) (apiv0.ServerListResponse, error) {
+	if fast, ok := registry.(interface {
+		ListServersJSON(context.Context, *database.ServerFilter, string, int) (apiv0.ServerListResponse, error)
+	}); ok && encoded {
+		return fast.ListServersJSON(ctx, filter, input.Cursor, input.Limit)
+	}
+	servers, next, err := registry.ListServers(ctx, filter, input.Cursor, input.Limit)
+	if err != nil {
+		return apiv0.ServerListResponse{}, err
+	}
+	values := make([]apiv0.ServerResponse, len(servers))
+	for i, server := range servers {
+		values[i] = *server
+	}
+	return apiv0.ServerListResponse{Servers: values, Metadata: apiv0.Metadata{Count: len(values), NextCursor: next}}, nil
 }

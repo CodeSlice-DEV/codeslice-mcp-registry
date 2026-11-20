@@ -24,21 +24,13 @@
             </div>
         </header>
 
-        <!-- Recently Updated -->
-        <div id="recently-updated" class="hidden mb-8">
-            <h2 class="text-xl font-semibold text-gray-900 mb-4">Recently Updated</h2>
-            <div id="recent-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <!-- Populated by JS -->
-            </div>
-        </div>
-
         <!-- Search and Filter -->
         <div class="mb-8 space-y-3">
             <div class="relative">
                 <input
                     type="search"
                     id="search"
-                    placeholder="Search servers by name..."
+                    placeholder="Search servers by name (at least 3 characters)..."
                     class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     autofocus
                 >
@@ -48,6 +40,17 @@
                 <input type="checkbox" id="latest-only" class="mr-2" checked>
                 <span>Show only latest versions</span>
             </label>
+        </div>
+
+        <!-- Recently Updated -->
+        <div id="recently-updated" class="hidden mb-8">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Recently Updated</h2>
+            <div id="recent-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- Populated by JS -->
+            </div>
+            <div class="mt-4 text-center">
+                <button id="recent-toggle" type="button" class="hidden text-sm text-blue-600 hover:underline"></button>
+            </div>
         </div>
 
         <!-- Loading State -->
@@ -143,6 +146,10 @@
         let currentCursor = null;
         let nextCursor = null;
         let searchTimeout = null;
+        let serverRequestSequence = 0;
+        const RECENT_PREVIEW_COUNT = 6;
+        let hasRecentServers = false;
+        let recentExpanded = false;
         let baseUrl = '';
 
         // Get base URL based on selection
@@ -264,12 +271,36 @@
 
                 if (data.servers && data.servers.length > 0) {
                     renderRecentServers(data.servers);
-                    document.getElementById('recently-updated').classList.remove('hidden');
+                    hasRecentServers = true;
+                    updateRecentlyUpdatedVisibility(document.getElementById('search').value, currentCursor);
                 }
             } catch (err) {
                 // Silently fail if recent updates can't be fetched
             }
         }
+
+        // Only show recently updated servers on the first page of an unfiltered listing,
+        // so they never push search results or later pages down.
+        function updateRecentlyUpdatedVisibility(search, cursor) {
+            const visible = hasRecentServers && !search && !cursor;
+            document.getElementById('recently-updated').classList.toggle('hidden', !visible);
+        }
+
+        function applyRecentExpanded() {
+            const cards = document.getElementById('recent-cards').children;
+            for (let i = 0; i < cards.length; i++) {
+                cards[i].classList.toggle('hidden', !recentExpanded && i >= RECENT_PREVIEW_COUNT);
+            }
+
+            const toggle = document.getElementById('recent-toggle');
+            toggle.classList.toggle('hidden', cards.length <= RECENT_PREVIEW_COUNT);
+            toggle.textContent = recentExpanded ? 'Show less' : `Show all ${cards.length} recently updated`;
+        }
+
+        document.getElementById('recent-toggle').addEventListener('click', () => {
+            recentExpanded = !recentExpanded;
+            applyRecentExpanded();
+        });
 
         // Render recently updated servers
         function renderRecentServers(recentServers) {
@@ -279,6 +310,7 @@
             recentServers.forEach(item => {
                 const server = item.server;
                 const meta = item._meta?.['io.modelcontextprotocol.registry/official'];
+                const identity = getServerCardIdentity(server);
 
                 const card = document.createElement('div');
                 card.className = 'bg-blue-50 border border-blue-200 rounded-lg overflow-hidden hover:border-blue-400 hover:shadow-md transition-all flex flex-col';
@@ -288,7 +320,11 @@
                 header.onclick = () => toggleDetails(card, item);
                 header.innerHTML = `
                     <div class="flex items-start justify-between gap-3 mb-2">
-                        <h3 class="font-semibold text-gray-900 text-base flex-1 min-w-0 break-all">${escapeHtml(server.name)}</h3>
+                        ${renderIcon(server)}
+                        <div class="flex-1 min-w-0">
+                            <h3 class="font-semibold text-gray-900 text-base ${identity.titleWrapClass}">${escapeHtml(identity.displayTitle)}</h3>
+                            ${identity.technicalName ? `<p class="text-xs text-gray-500 leading-tight mt-0.5 break-all">${escapeHtml(identity.technicalName)}</p>` : ''}
+                        </div>
                         <span class="text-xs text-gray-500 font-medium whitespace-nowrap">v${escapeHtml(server.version)}</span>
                     </div>
                     <p class="text-sm text-gray-600 leading-relaxed line-clamp-2 mb-2 break-words">${escapeHtml(server.description || '')}</p>
@@ -300,10 +336,38 @@
                 card.appendChild(header);
                 container.appendChild(card);
             });
+
+            applyRecentExpanded();
+        }
+
+        function getServerCardIdentity(server) {
+            const hasDistinctTitle = Boolean(server.title && server.title !== server.name);
+
+            return {
+                displayTitle: hasDistinctTitle ? server.title : server.name,
+                technicalName: hasDistinctTitle ? server.name : null,
+                titleWrapClass: hasDistinctTitle ? 'break-words' : 'break-all'
+            };
         }
 
         // Fetch servers
         async function fetchServers(cursor = null, search = '', latestOnly = null) {
+            const requestSequence = ++serverRequestSequence;
+            updateRecentlyUpdatedVisibility(search, cursor);
+            document.getElementById('error').classList.add('hidden');
+            if (search !== '' && Array.from(search.trim()).length < 3) {
+                servers = [];
+                cursorHistory = [];
+                currentCursor = null;
+                nextCursor = null;
+                document.getElementById('server-cards').textContent = 'Type at least 3 characters to search.';
+                updatePagination();
+                document.getElementById('page-info').textContent = '';
+                updateURL();
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('server-list').classList.remove('hidden');
+                return;
+            }
             try {
                 if (latestOnly === null) {
                     latestOnly = document.getElementById('latest-only').checked;
@@ -316,6 +380,8 @@
 
                 const response = await fetch(url);
                 const data = await response.json();
+                if (requestSequence !== serverRequestSequence) return;
+                if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
 
                 servers = data.servers || [];
                 nextCursor = data.metadata?.nextCursor || null;
@@ -327,6 +393,7 @@
                 document.getElementById('loading').classList.add('hidden');
                 document.getElementById('server-list').classList.remove('hidden');
             } catch (err) {
+                if (requestSequence !== serverRequestSequence) return;
                 showError('Failed to load servers: ' + err.message);
             }
         }
@@ -344,6 +411,7 @@
             servers.forEach(item => {
                 const server = item.server;
                 const meta = item._meta?.['io.modelcontextprotocol.registry/official'];
+                const identity = getServerCardIdentity(server);
 
                 const card = document.createElement('div');
                 card.className = 'bg-white border border-gray-200 rounded-lg overflow-hidden hover:border-blue-300 hover:shadow-md transition-all flex flex-col';
@@ -353,7 +421,11 @@
                 header.onclick = () => toggleDetails(card, item);
                 header.innerHTML = `
                     <div class="flex items-start justify-between gap-3 mb-2">
-                        <h3 class="font-semibold text-gray-900 text-base flex-1 min-w-0">${escapeHtml(server.name)}</h3>
+                        ${renderIcon(server)}
+                        <div class="flex-1 min-w-0">
+                            <h3 class="font-semibold text-gray-900 text-base ${identity.titleWrapClass}">${escapeHtml(identity.displayTitle)}</h3>
+                            ${identity.technicalName ? `<p class="text-xs text-gray-500 leading-tight mt-0.5 break-all">${escapeHtml(identity.technicalName)}</p>` : ''}
+                        </div>
                         <span class="text-xs text-gray-500 font-medium whitespace-nowrap">v${escapeHtml(server.version)}</span>
                     </div>
                     <p class="text-sm text-gray-600 leading-relaxed line-clamp-2 mb-2">${escapeHtml(server.description || '')}</p>
@@ -509,6 +581,60 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        // Icons are optional and come from `server.icons` in server.json.
+        // The publish API already rejects non-HTTPS icon sources, but this UI can
+        // be pointed at a staging, local or custom API base URL, so the scheme is
+        // re-checked here rather than trusted.
+        function isSafeIconSrc(src) {
+            if (typeof src !== 'string') return false;
+            try {
+                return new URL(src, window.location.href).protocol === 'https:';
+            } catch {
+                return false;
+            }
+        }
+
+        // Smallest icon at least as large as the rendered size in device pixels,
+        // so it stays crisp without pulling a needlessly large file. Scalable
+        // icons and icons with omitted sizes (usable at any size) win outright.
+        // `theme: 'dark'` means "for a dark background"; this UI is light, so those
+        // are used only when nothing else is available.
+        const ICON_RENDER_PX = 40;
+
+        function iconScore(icon) {
+            const sizes = Array.isArray(icon.sizes) ? icon.sizes : [];
+            if (!sizes.length || sizes.includes('any')) return 0;
+            const requiredPx = ICON_RENDER_PX * (window.devicePixelRatio || 1);
+            const widths = sizes
+                .map((s) => parseInt(String(s).split('x')[0], 10))
+                .filter((n) => Number.isFinite(n) && n > 0);
+            if (!widths.length) return requiredPx * 100;
+            const atLeast = widths.filter((w) => w >= requiredPx);
+            return atLeast.length
+                ? Math.min(...atLeast)
+                : requiredPx * 100 + (requiredPx - Math.max(...widths));
+        }
+
+        function pickIcon(server) {
+            const icons = Array.isArray(server?.icons) ? server.icons : [];
+            const usable = icons.filter((i) => i && isSafeIconSrc(i.src));
+            if (!usable.length) return null;
+            const preferred = usable.filter((i) => i.theme !== 'dark');
+            const pool = preferred.length ? preferred : usable;
+            return pool.reduce((best, i) => (iconScore(i) < iconScore(best) ? i : best));
+        }
+
+        // alt is intentionally empty: the icon sits beside the server name, so
+        // announcing it again is noise for screen readers. A broken or blocked
+        // image removes itself rather than leaving a placeholder in the layout.
+        function renderIcon(server) {
+            const icon = pickIcon(server);
+            if (!icon) return '';
+            return `<img src="${escapeAttr(icon.src)}" alt=""
+                    class="w-10 h-10 rounded flex-shrink-0 object-contain bg-white border border-gray-200"
+                    loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
         }
 
         function formatDate(dateStr) {
