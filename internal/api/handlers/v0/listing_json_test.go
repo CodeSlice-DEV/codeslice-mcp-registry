@@ -34,12 +34,12 @@ func TestEncodedListingMatchesTypedAPIThroughUpdates(t *testing.T) {
 	require.NoError(t, err)
 	muxes := []*http.ServeMux{http.NewServeMux(), http.NewServeMux()}
 	var schemas [][]byte
-	for i, mux := range muxes {
+	for _, mux := range muxes {
 		cfg := huma.DefaultConfig("test", "1")
 		cfg.CreateHooks = []func(huma.Config) huma.Config{}
 		api := humago.New(mux, cfg)
-		v0.RegisterServersEndpoints(api, "/v0", registry, i == 1)
-		v0.RegisterServersEndpoints(api, "/v0.1", registry, i == 1)
+		v0.RegisterServersEndpoints(api, "/v0", registry)
+		v0.RegisterServersEndpoints(api, "/v0.1", registry)
 		raw, err := json.Marshal(api.OpenAPI())
 		require.NoError(t, err)
 		schemas = append(schemas, raw)

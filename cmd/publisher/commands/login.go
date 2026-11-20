@@ -61,7 +61,6 @@ type CryptoAlgorithm auth.CryptoAlgorithm
 type SignerType string
 
 type LoginFlags struct {
-type LoginFlags struct {
 	Domain           string
 	PrivateKey       string
 	PrivateKeyFile   string
@@ -74,7 +73,6 @@ type LoginFlags struct {
 	CryptoAlgorithm  CryptoAlgorithm
 	SignerType       SignerType
 	ArgOffset        int
-}
 }
 
 const (
@@ -266,8 +264,7 @@ Examples:
 
   # Keep the key out of the command line: read it from a file or the environment
   mcp-publisher login dns -domain example.com -private-key-file key.hex
-  MCP_PRIVATE_KEY=<64 hex chars> mcp-publisher login dns -domain example.com
-`)
+  MCP_PRIVATE_KEY=<64 hex chars> mcp-publisher login dns -domain example.com`)
 	}
 
 	method := args[0]

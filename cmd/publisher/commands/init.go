@@ -263,6 +263,8 @@ func buildGitHubServerName(repoURL, subfolder string) string {
 // githubAPIBaseURL is a variable so the tests can point it at a stub server.
 var githubAPIBaseURL = "https://api.github.com"
 
+const MethodGitHub = "github"
+
 // parseGitHubOwnerRepo pulls owner/repo out of a github.com web URL, which is
 // the only shape `detectRepoURL` produces for GitHub (it rewrites the SSH form
 // and strips `.git`). Anything else — a different host, a bare path, a URL with

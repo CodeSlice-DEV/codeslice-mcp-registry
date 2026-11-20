@@ -704,7 +704,6 @@ func (db *PostgreSQL) CreateServer(ctx context.Context, tx pgx.Tx, serverJSON *a
 		INSERT INTO servers (server_name, version, status, status_changed_at, status_message, published_at, updated_at, is_latest, value, listing_value, listing_codec, tenant_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
-	`
 
 	var tenantIDAny any
 	if tid := auth.TenantIDFromContext(ctx); tid != "" {
