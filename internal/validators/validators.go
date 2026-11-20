@@ -132,8 +132,32 @@ func ValidateServerJSON(serverJSON *apiv0.ServerJSON, opts ValidationOptions) *V
 func validateRepository(ctx *ValidationContext, obj *model.Repository) *ValidationResult {
 	result := &ValidationResult{Valid: true, Issues: []ValidationIssue{}}
 
-	// Skip validation if repository is nil or empty (optional field)
-	if obj == nil || (obj.URL == "" && obj.Source == "") {
+	// The repository field is optional, but its required fields must be present
+	// when the repository object itself is provided.
+	if obj == nil {
+		return result
+	}
+	if obj.URL == "" {
+		issue := NewValidationIssue(
+			ValidationIssueTypeSemantic,
+			ctx.Field("url").String(),
+			"repository url is required when repository is provided",
+			ValidationIssueSeverityError,
+			"repository-url-required",
+		)
+		result.AddIssue(issue)
+	}
+	if obj.Source == "" {
+		issue := NewValidationIssue(
+			ValidationIssueTypeSemantic,
+			ctx.Field("source").String(),
+			"repository source is required when repository is provided",
+			ValidationIssueSeverityError,
+			"repository-source-required",
+		)
+		result.AddIssue(issue)
+	}
+	if !result.Valid {
 		return result
 	}
 
@@ -409,7 +433,8 @@ func looksLikeVersionRange(version string) bool {
 func validateArgument(ctx *ValidationContext, obj *model.Argument) *ValidationResult {
 	result := &ValidationResult{Valid: true, Issues: []ValidationIssue{}}
 
-	if obj.Type == model.ArgumentTypeNamed {
+	switch obj.Type {
+	case model.ArgumentTypeNamed:
 		// Validate named argument name format
 		nameResult := validateNamedArgumentName(ctx.Field("name"), obj.Name)
 		result.Merge(nameResult)
@@ -417,6 +442,27 @@ func validateArgument(ctx *ValidationContext, obj *model.Argument) *ValidationRe
 		// Validate value and default don't start with the name
 		valueResult := validateArgumentValueFields(ctx, obj.Name, obj.Value, obj.Default)
 		result.Merge(valueResult)
+	case model.ArgumentTypePositional:
+		// The schema requires value or valueHint to be present; an explicitly
+		// empty value is a valid CLI argument.
+		if !obj.HasValueOrHint() {
+			issue := NewValidationIssueFromError(
+				ValidationIssueTypeSemantic,
+				ctx.String(),
+				ErrPositionalArgumentValueRequired,
+				"positional-argument-value-or-hint-required",
+			)
+			result.AddIssue(issue)
+		}
+	default:
+		// Reject unknown argument types, including the empty string
+		issue := NewValidationIssueFromError(
+			ValidationIssueTypeSemantic,
+			ctx.Field("type").String(),
+			fmt.Errorf("%w: %q", ErrInvalidArgumentType, obj.Type),
+			"invalid-argument-type",
+		)
+		result.AddIssue(issue)
 	}
 	return result
 }

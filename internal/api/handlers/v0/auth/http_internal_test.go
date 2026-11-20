@@ -1,8 +1,17 @@
 package auth
 
 import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestIsBlockedIP(t *testing.T) {
@@ -76,5 +85,286 @@ func TestIsBlockedIP(t *testing.T) {
 				t.Errorf("isBlockedIP(%q) = %v, want %v", tc.ip, got, tc.blocked)
 			}
 		})
+	}
+}
+
+// Mirrors the constants of the same purpose in the external test package; the
+// well-known path and a placeholder domain are all FetchKey needs, since the
+// transport dials the local test server regardless of the request hostname.
+const (
+	internalWellKnownPath = "/.well-known/mcp-registry-auth"
+	internalTestDomain    = "example.com"
+)
+
+// newLocalTLSTransport builds a transport that reaches srv regardless of the
+// hostname in the request URL, so the production client configuration can be
+// exercised against a local server.
+func newLocalTLSTransport(srv *httptest.Server) *http.Transport {
+	dialAddr := srv.Listener.Addr().String()
+	return &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // testing only
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := &net.Dialer{}
+			return d.DialContext(ctx, network, dialAddr)
+		},
+		ForceAttemptHTTP2:   false,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+}
+
+func newLocalTLSFetcher(srv *httptest.Server) *DefaultHTTPKeyFetcher {
+	return &DefaultHTTPKeyFetcher{client: newHTTPKeyFetcherClient(newLocalTLSTransport(srv))}
+}
+
+// The published HTTP verification contract (see
+// docs/modelcontextprotocol-io/authentication.mdx) tells users the endpoint must
+// answer 200 OK directly, so the client must never follow a redirect to another
+// host or path.
+func TestHTTPKeyFetcherClient_DoesNotFollowRedirects(t *testing.T) {
+	var redirectTargetHit bool
+
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTargetHit = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("v=MCPv1; k=ed25519; p=REDIRECTED"))
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != internalWellKnownPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		http.Redirect(w, r, target.URL+internalWellKnownPath, http.StatusMovedPermanently)
+	}))
+	defer redirector.Close()
+
+	fetcher := newLocalTLSFetcher(redirector)
+
+	_, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+	if err == nil {
+		t.Fatal("expected the redirect to fail verification, got nil error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 301") {
+		t.Fatalf("got err=%v, want it to report HTTP 301", err)
+	}
+	if redirectTargetHit {
+		t.Error("the redirect target was requested; redirects must not be followed")
+	}
+}
+
+// Pins the timeout users are told to satisfy and the request headers the
+// documented fetch sends.
+func TestHTTPKeyFetcherClient_TimeoutAndRequestHeaders(t *testing.T) {
+	type observed struct {
+		accept    string
+		userAgent string
+	}
+	var got observed
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = observed{accept: r.Header.Get("Accept"), userAgent: r.Header.Get("User-Agent")}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("  v=MCPv1; k=ed25519; p=PUBLIC_KEY\n"))
+	}))
+	defer srv.Close()
+
+	fetcher := newLocalTLSFetcher(srv)
+
+	if fetcher.client.Timeout != httpKeyFetchTimeout {
+		t.Errorf("client timeout = %v, want %v", fetcher.client.Timeout, httpKeyFetchTimeout)
+	}
+
+	key, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "v=MCPv1; k=ed25519; p=PUBLIC_KEY"; key != want {
+		t.Errorf("key = %q, want %q (surrounding whitespace must be trimmed)", key, want)
+	}
+	if want := "text/plain"; got.accept != want {
+		t.Errorf("Accept = %q, want %q", got.accept, want)
+	}
+	if want := "mcp-registry/1.0"; got.userAgent != want {
+		t.Errorf("User-Agent = %q, want %q", got.userAgent, want)
+	}
+}
+
+// A body above the documented 4096 byte limit must fail even when the server
+// answers 200 OK.
+func TestHTTPKeyFetcher_RejectsResponseAboveDocumentedLimit(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != internalWellKnownPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("A"), MaxKeyResponseSize+1))
+	}))
+	defer srv.Close()
+
+	fetcher := newLocalTLSFetcher(srv)
+	_, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("got err=%v, want a response-too-large error", err)
+	}
+}
+
+// newDropFirstConnServer returns a TLS server that severs the connection
+// before writing any response bytes for the first dropFirst requests and
+// serves the proof record afterwards. Dropping the connection is a
+// deterministic stand-in for the transient unreachability reported in issue
+// #1625 (`dial tcp <ip>:443: i/o timeout`): the endpoint is in fact reachable
+// moments later, but the verification fetch used to be a single attempt that
+// failed the whole HTTP login. The returned counter counts every request the
+// server sees.
+func newDropFirstConnServer(t *testing.T, dropFirst int32) (*httptest.Server, *int32) {
+	t.Helper()
+	var requests int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&requests, 1) <= dropFirst {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("ResponseWriter does not support hijacking")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("Hijack failed: %v", err)
+				return
+			}
+			_ = conn.Close() // drop the connection without responding
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("v=MCPv1; k=ed25519; p=RECOVERED_KEY"))
+	}))
+	return srv, &requests
+}
+
+// Regression test for #1625: the well-known verification fetch must recover
+// from a transient connection failure instead of failing authentication for
+// an endpoint that is actually reachable.
+func TestHTTPKeyFetcher_RetriesTransientConnectionFailure(t *testing.T) {
+	srv, requests := newDropFirstConnServer(t, 1)
+	defer srv.Close()
+
+	fetcher := newLocalTLSFetcher(srv)
+	key, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+	if err != nil {
+		t.Fatalf("expected the fetch to recover from one dropped connection, got err=%v", err)
+	}
+	if want := "v=MCPv1; k=ed25519; p=RECOVERED_KEY"; key != want {
+		t.Errorf("key = %q, want %q", key, want)
+	}
+	if got := atomic.LoadInt32(requests); got != 2 {
+		t.Errorf("server saw %d requests, want 2 (1 dropped + 1 successful retry)", got)
+	}
+}
+
+// Transient HTTP statuses (timeouts, rate limits, server errors) describe a
+// momentary condition and must be retried like connection failures (#1625).
+func TestHTTPKeyFetcher_RetriesTransientStatuses(t *testing.T) {
+	for _, status := range []int{
+		http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+	} {
+		t.Run(fmt.Sprintf("status-%d", status), func(t *testing.T) {
+			var requests int32
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if atomic.AddInt32(&requests, 1) == 1 {
+					w.WriteHeader(status)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("v=MCPv1; k=ed25519; p=RECOVERED_KEY"))
+			}))
+			defer srv.Close()
+
+			fetcher := newLocalTLSFetcher(srv)
+			key, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+			if err != nil {
+				t.Fatalf("expected the fetch to retry past HTTP %d, got err=%v", status, err)
+			}
+			if want := "v=MCPv1; k=ed25519; p=RECOVERED_KEY"; key != want {
+				t.Errorf("key = %q, want %q", key, want)
+			}
+			if got := atomic.LoadInt32(&requests); got != 2 {
+				t.Errorf("server saw %d requests, want 2", got)
+			}
+		})
+	}
+}
+
+// Permanent failures (client errors, redirects) describe the request itself
+// and must fail fast without retries, keeping the documented status errors.
+func TestHTTPKeyFetcher_DoesNotRetryPermanentFailures(t *testing.T) {
+	for _, status := range []int{
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMovedPermanently,
+	} {
+		t.Run(fmt.Sprintf("status-%d", status), func(t *testing.T) {
+			var requests int32
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+
+			fetcher := newLocalTLSFetcher(srv)
+			_, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if want := fmt.Sprintf("HTTP %d", status); !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want it to contain %q", err, want)
+			}
+			if got := atomic.LoadInt32(&requests); got != 1 {
+				t.Errorf("server saw %d requests, want 1 (permanent failures must not be retried)", got)
+			}
+		})
+	}
+}
+
+// When every attempt fails, the fetch must give up after a bounded number of
+// attempts and report how many were made — #1625 asks for diagnostics that
+// distinguish fetch problems from key problems.
+func TestHTTPKeyFetcher_GivesUpAfterBoundedAttempts(t *testing.T) {
+	srv, requests := newDropFirstConnServer(t, 2)
+	defer srv.Close()
+
+	fetcher := newLocalTLSFetcher(srv)
+	_, err := fetcher.FetchKey(context.Background(), internalTestDomain)
+	if err == nil {
+		t.Fatal("expected an error when every attempt drops the connection")
+	}
+	if got := atomic.LoadInt32(requests); got != 2 {
+		t.Errorf("server saw %d requests, want 2 bounded attempts", got)
+	}
+	if !strings.Contains(err.Error(), "2 attempts") {
+		t.Errorf("err = %v, want it to report the number of attempts", err)
+	}
+}
+
+// Once the caller's context is done, no further attempts may be made.
+func TestHTTPKeyFetcher_DoesNotRetryAfterContextCancellation(t *testing.T) {
+	srv, requests := newDropFirstConnServer(t, 1)
+	defer srv.Close()
+
+	fetcher := newLocalTLSFetcher(srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := fetcher.FetchKey(ctx, internalTestDomain); err == nil {
+		t.Fatal("expected an error with a cancelled context")
+	}
+	if got := atomic.LoadInt32(requests); got != 0 {
+		t.Errorf("server saw %d requests, want 0 (a cancelled context must not start a request)", got)
 	}
 }

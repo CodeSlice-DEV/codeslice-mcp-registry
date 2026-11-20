@@ -51,10 +51,9 @@ jobs:
                 # and nothing else, so that legit PRs touching seed data
                 # alongside real code are left alone.
                 #
-                # Keep this list in sync with the copy in stage 2. It stays an
-                # explicit list rather than a broad `**/server.json` glob:
-                # because we require *every* file to match, an over-broad
-                # pattern would auto-close a legitimate single-file PR.
+                # Keep this list in sync with the copy in stage 2.
+                # Match server.json at any depth, including namespace paths
+                # like io.quickbrew/mcp-server/server.json from #1698.
                 # data/servers/** is here because #1524 put its server.json
                 # there - a natural guess next to data/seed.json - and slipped
                 # through the original servers/**-only list.
@@ -63,8 +62,11 @@ jobs:
                 for f in "${FILES[@]}"; do
                   if [[ "$f" == servers/* \
                      || "$f" == data/servers/* \
+                     || "$f" == data/data/servers/* \
+                     || "$f" =~ ^data/[^/]*server\.json$ \
                      || "$f" == "data/seed.json" \
                      || "$f" == "server.json" \
+                     || "$f" == **/server.json \
                      || "$f" == "servers.json" ]]; then
                     publish_attempt=1
                   else
@@ -87,7 +89,7 @@ jobs:
 
       - name: Record flagged PR number
         if: steps.classify.outputs.match == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4
         with:
           name: flagged-pr
           path: pr-number.txt
